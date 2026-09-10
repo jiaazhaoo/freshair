@@ -297,3 +297,109 @@ class TestLoadConfig(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestFreshMode(unittest.TestCase):
+    """The default mode: only the goal and the current state go out."""
+
+    def turns(self):
+        return [
+            {"role": "user", "text": "build a thing that does X", "ts": ""},
+            {"role": "assistant", "text": "I'll start with approach A", "ts": ""},
+            {"role": "tool", "text": "[tool result]\nok", "ts": ""},
+            {"role": "assistant", "text": "[tool: Bash] {}\nA turned out hard, "
+                                          "switching to B", "ts": ""},
+            {"role": "user", "text": "also make it fast", "ts": ""},
+            {"role": "assistant", "text": "[tool: Edit] {}\nB is done and tested",
+             "ts": ""},
+        ]
+
+    def test_goal_is_the_human_instructions_and_nothing_else(self):
+        goal = wdyt.extract_goal(self.turns(), 0)
+        self.assertIn("build a thing that does X", goal)
+        self.assertIn("also make it fast", goal)
+        # the agent's own reasoning is what we are trying not to ship
+        self.assertNotIn("approach A", goal)
+        self.assertNotIn("switching to B", goal)
+
+    def test_goal_turns_caps_the_instructions(self):
+        goal = wdyt.extract_goal(self.turns(), 1)
+        self.assertIn("build a thing", goal)
+        self.assertNotIn("also make it fast", goal)
+
+    def test_harness_boilerplate_is_not_a_goal(self):
+        turns = [{"role": "user", "text": "Continue from where you left off.", "ts": ""},
+                 {"role": "user", "text": "the real ask", "ts": ""}]
+        goal = wdyt.extract_goal(turns, 0)
+        self.assertNotIn("Continue from where", goal)
+        self.assertIn("the real ask", goal)
+        self.assertEqual(goal.count("--- instruction"), 1)
+
+    def test_goal_survives_a_session_with_no_human_turns(self):
+        self.assertIn("no human instructions", wdyt.extract_goal(
+            [{"role": "assistant", "text": "hi", "ts": ""}], 0))
+
+    def test_claim_is_the_latest_agent_prose_without_the_tool_log(self):
+        claim = wdyt.extract_claim(self.turns())
+        self.assertEqual(claim, "B is done and tested")
+        self.assertNotIn("[tool:", claim)
+
+    def test_claim_skips_turns_that_are_only_tool_calls(self):
+        turns = [{"role": "assistant", "text": "the real summary", "ts": ""},
+                 {"role": "assistant", "text": "[tool: Bash] {}", "ts": ""}]
+        self.assertEqual(wdyt.extract_claim(turns), "the real summary")
+
+    def test_no_agent_turns_means_no_claim(self):
+        self.assertEqual(wdyt.extract_claim([{"role": "user", "text": "x", "ts": ""}]), "")
+
+
+class TestSelfContamination(unittest.TestCase):
+    """A CLI backend logs its own session. None of it may come back as input."""
+
+    def test_a_logged_payload_is_not_read_back_as_a_human_instruction(self):
+        payload = wdyt.SYSTEM_PROMPT_FRESH.format(verify_rule="") + "\n\nreview this"
+        path = write_transcript([user("the actual goal"), user(payload)])
+        turns = wdyt.parse_transcript(path, keep_thinking=False)
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(turns[0]["text"], "the actual goal")
+
+    def test_payloads_from_versions_before_the_marker_are_also_caught(self):
+        path = write_transcript([
+            user("the actual goal"),
+            user("You are an outside reviewer. You were NOT part of the "
+                 "conversation you are about to read."),
+        ])
+        self.assertEqual(len(wdyt.parse_transcript(path, False)), 1)
+
+    def test_the_marker_travels_with_both_system_prompts(self):
+        for prompt in (wdyt.SYSTEM_PROMPT_FRESH, wdyt.SYSTEM_PROMPT_FULL):
+            self.assertIn(wdyt.WDYT_MARKER, prompt)
+
+    def test_a_review_session_is_recognised_as_our_own(self):
+        ours = write_transcript([user("a genuine session")])
+        childs = write_transcript([user(wdyt.MARKER_LINE + "review this")])
+        self.assertFalse(wdyt.is_wdyt_child(ours))
+        self.assertTrue(wdyt.is_wdyt_child(childs))
+
+    def test_child_env_drops_this_session_identity_but_keeps_the_rest(self):
+        with mock.patch.dict(os.environ,
+                             {"CLAUDE_CODE_SESSION_ID": "abc",
+                              "CLAUDE_PROJECT_DIR": "/repo",
+                              "PATH": "/usr/bin",
+                              "ANTHROPIC_API_KEY": "secret"},
+                             clear=True):
+            env = wdyt.child_env()
+        self.assertNotIn("CLAUDE_CODE_SESSION_ID", env)
+        self.assertNotIn("CLAUDE_PROJECT_DIR", env)
+        self.assertEqual(env["PATH"], "/usr/bin")
+        self.assertEqual(env["ANTHROPIC_API_KEY"], "secret", "auth must survive")
+
+    def test_repo_is_handed_back_as_a_readable_dir_where_supported(self):
+        cmd = wdyt.cli_command(wdyt.CLI_BACKENDS["claude"], None, Path("/repo"))
+        self.assertIn("--add-dir", cmd)
+        self.assertEqual(cmd[cmd.index("--add-dir") + 1], "/repo")
+
+    def test_backends_without_a_dir_flag_are_unaffected(self):
+        cmd = wdyt.cli_command(wdyt.CLI_BACKENDS["codex"], None, Path("/repo"))
+        self.assertNotIn("/repo", cmd)
+        self.assertEqual(cmd[-1], "-")

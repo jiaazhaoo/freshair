@@ -1,25 +1,36 @@
 ---
 name: wdyt
-description: Send the current session's raw transcript to a model that has not seen it, for an outside opinion. Routes through a locally installed CLI the user is already signed in to (Codex, Gemini, Claude) or OpenRouter. Use when the conversation has gone long and circular, when the same fix keeps failing, before committing to a big refactor, or whenever the user asks for a second opinion, outside eyes, a sanity check, or says things like "问问别的模型", "换个思路", "我们是不是跑偏了", "wdyt", "越聊越笨". Not for ordinary code review of a diff.
+description: Get an outside opinion on the current work from a model that has not seen this conversation. By default it sends only the original goal and the current state, so the reviewer cannot be anchored by the reasoning that got you here. Routes through a locally installed CLI the user is already signed in to (Codex, Gemini, Claude) or OpenRouter. Use when the conversation has gone long and circular, when the same fix keeps failing, before committing to a big refactor, or whenever the user asks for a second opinion, outside eyes, a sanity check, or says things like "问问别的模型", "换个思路", "我们是不是跑偏了", "wdyt", "越聊越笨". Not for ordinary code review of a diff.
 argument-hint: [what to look at]
 allowed-tools: Bash(python3 *)
 ---
 
 # wdyt — what do you think
 
-Hand this session's **raw transcript** to a model that has never seen it, and
+Get the work in front of a model that has never seen this conversation, and
 relay what it says back.
 
-## Why the transcript, not a summary
+## What actually gets sent, and why
 
-You are the wrong narrator for this. By the time this skill is worth invoking,
-you have spent dozens of turns building on your own earlier decisions — and any
-summary you write will quietly preserve exactly the assumptions that need
-challenging. The whole design is to route around you: the script reads the
-session `.jsonl` off disk and ships it out untouched.
+**Default (`--mode fresh`): only the goal and the current state.** Every
+instruction the human gave, plus the git diff — and nothing in between. All the
+agent reasoning is deliberately withheld.
 
-So: **do not pre-digest the conversation.** Do not write a "here's what we're
-doing" preamble into the prompt. Just run the script.
+That withholding is the feature, not a size optimisation. Hand a reviewer the
+full back-and-forth and it reads your justifications *before* it forms a view,
+which anchors it on the same path you are stuck on. It agrees with you, and the
+whole exercise is wasted. Given only the destination and the goal, it has to
+reason forward on its own — and that is where a genuinely different answer comes
+from.
+
+**`--mode full` sends the whole transcript instead.** Use it for one specific
+question: *where exactly did this go wrong?* Locating the turn that drifted needs
+the turns. Anything else is better served by `fresh`.
+
+Either way, **do not pre-digest the conversation.** Do not write a "here's what
+we're doing" summary into the prompt. Your summary preserves the assumptions that
+need challenging — that is the thing being routed around. The script reads the
+session `.jsonl` off disk itself. Just run it.
 
 ## Running it
 
@@ -57,6 +68,9 @@ signal than it looks, and they should know which one they got.
 
 | Flag | Use |
 |---|---|
+| `--mode` | `fresh` (default) or `full` — see above. |
+| `--goal-turns N` | Use only the first N human instructions as the goal. Handy when a long session has accumulated steering that muddies the original ask. |
+| `--no-claim` | Drop the agent's own account of where things stand, leaving the reviewer nothing but the goal and the diff. |
 | `-b, --backend` | Force one: `codex`, `gemini`, `claude`, `openrouter`. |
 | `-m, --model` | Model id. Repeat or comma-separate to run several in parallel. Omit on a CLI backend to use its own default. |
 | `--check` | Probe every backend with a one-token prompt and report which ones actually work here. Run this first when a backend fails. |
@@ -96,6 +110,16 @@ the user's files for an API key.
 Per-repo defaults live in `.wdyt.json` (see `.wdyt.example.json` in the repo
 root). Every backend's command line is overridable there, so a changed upstream
 flag is a config edit, not a code change.
+
+## Where the reviewer runs
+
+CLI backends are started from a scratch directory, not from the repo — an agent
+CLI files its session log under a path derived from its working directory, and
+started inside the repo the reviewer's own prompt lands in the transcript we
+read, making each review the input to the next one. The repo is handed back as a
+readable directory where the backend supports it, so the reviewer can still open
+a file to check a claim. It cannot write: `codex exec --sandbox read-only`,
+`claude -p --disallowed-tools Edit Write NotebookEdit Bash`.
 
 ## What this sends off-machine
 

@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+.wdyt.json
+wdyt-review*.md

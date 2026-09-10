@@ -9,6 +9,10 @@ already stuck. The outside model reads what actually happened.
 Stdlib only. No install step.
 """
 
+# `X | None` in a signature is evaluated at def time before 3.10; this defers
+# every annotation so the script runs on whatever python the user already has.
+from __future__ import annotations
+
 import argparse
 import concurrent.futures
 import json
@@ -17,6 +21,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -532,6 +537,67 @@ def ask_cli(backend: str, spec: dict, model: str | None, system: str, user: str,
     return {"model": name, "text": out, "usage": {}, "seconds": round(time.time() - started, 1)}
 
 
+PROBE_PROMPT = "Reply with exactly this token and nothing else: WDYT-OK"
+PROBE_TOKEN = "WDYT-OK"
+
+
+def check_backends(backends: dict[str, dict], selected: list[str],
+                   config: dict, timeout: int) -> int:
+    """Actually call each backend with a one-token prompt.
+
+    The command lines here are built from each vendor's documented flags, and
+    vendors change flags. This turns "should work" into something the user can
+    confirm on their own machine in a few seconds.
+    """
+    neutral = Path(tempfile.gettempdir())
+    failures = 0
+
+    # The in-progress line only makes sense on a terminal; carriage returns do
+    # not overwrite anything in a pipe or a log file.
+    live = sys.stdout.isatty()
+
+    def progress(line: str) -> None:
+        if live:
+            print(line, end="\r", flush=True)
+
+    def emit(line: str) -> None:
+        print(("\r" + " " * 60 + "\r" if live else "") + line)
+
+    for name in selected:
+        if name == "openrouter":
+            key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+            if not key:
+                emit("  ✗ openrouter — OPENROUTER_API_KEY is not set")
+                failures += 1
+                continue
+            model = (config.get("models") or DEFAULT_MODELS)[0]
+            progress(f"  … openrouter ({model})")
+            r = ask_openrouter(model, "", PROBE_PROMPT, key, 0.0, timeout)
+            label = f"openrouter ({model})"
+        else:
+            spec = backends[name]
+            binary = spec["cmd"][0]
+            if not shutil.which(binary):
+                emit(f"  – {name:<11} not installed ({binary} not on PATH)")
+                continue
+            cmd = " ".join(cli_command(spec, None))
+            progress(f"  … {name}")
+            r = ask_cli(name, spec, None, "", PROBE_PROMPT, timeout, neutral)
+            label = f"{name:<11} {cmd}"
+
+        if r.get("error"):
+            emit(f"  ✗ {label}\n      {r['error'].splitlines()[0]}")
+            failures += 1
+        elif PROBE_TOKEN not in (r.get("text") or ""):
+            emit(f"  ✗ {label}\n      responded, but not with the probe token: "
+                 f"{(r.get('text') or '')[:120]!r}")
+            failures += 1
+        else:
+            emit(f"  ✓ {label}   ({r['seconds']}s)")
+
+    return failures
+
+
 def resolve_backends(config: dict) -> dict[str, dict]:
     """Built-in CLI backends, with per-repo overrides layered on top."""
     merged = {k: dict(v) for k, v in CLI_BACKENDS.items()}
@@ -614,10 +680,19 @@ def main() -> None:
                     help="language for the review")
     ap.add_argument("--temperature", type=float, default=float(config.get("temperature", 0.7)))
     ap.add_argument("--timeout", type=int, default=int(config.get("timeout", 600)))
+    ap.add_argument("--check", action="store_true",
+                    help="probe each backend with a one-token prompt and report "
+                         "which ones actually work on this machine")
     ap.add_argument("--dry-run", action="store_true",
                     help="print exactly what would be sent and how, call nothing")
     ap.add_argument("--save", metavar="PATH", help="also write the review to this file")
     args = ap.parse_args()
+
+    if args.check:
+        selected = ([args.backend] if args.backend not in ("auto", None)
+                    else list(backends) + ["openrouter"])
+        print("Probing backends (a real call each, one token of output):")
+        sys.exit(1 if check_backends(backends, selected, config, args.timeout) else 0)
 
     backend = args.backend
     if backend == "auto":

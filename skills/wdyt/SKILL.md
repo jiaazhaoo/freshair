@@ -59,6 +59,7 @@ signal than it looks, and they should know which one they got.
 |---|---|
 | `-b, --backend` | Force one: `codex`, `gemini`, `claude`, `openrouter`. |
 | `-m, --model` | Model id. Repeat or comma-separate to run several in parallel. Omit on a CLI backend to use its own default. |
+| `--check` | Probe every backend with a one-token prompt and report which ones actually work here. Run this first when a backend fails. |
 | `--dry-run` | Print the exact payload and the exact command, call nothing. Use this if the user asks what will be sent. |
 | `--thinking` | Include your thinking blocks. Useful when the question is *why* you concluded something. Off by default — it roughly doubles the payload. |
 | `--budget N` | Max transcript characters (default 140000). Lower it if a backend rejects the size. |
@@ -85,10 +86,12 @@ that makes this skill worthless.
    unprompted — an outside model with partial context can confidently send you
    somewhere worse.
 
-## If no backend is available
+## If a backend fails
 
-The script says which one it wanted and how to fix it. Relay that. Do not go
-hunting through the user's files for an API key.
+Run `--check`. It probes each backend with a one-token prompt and prints the
+exact command line it used, which separates "not installed" from "installed but
+the flags have changed upstream". Relay what it says. Do not go hunting through
+the user's files for an API key.
 
 Per-repo defaults live in `.wdyt.json` (see `.wdyt.example.json` in the repo
 root). Every backend's command line is overridable there, so a changed upstream

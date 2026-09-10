@@ -53,6 +53,22 @@ diff 只能看到"改成了什么"，对话记录能看到"为什么改成这样
 
 CLI 后端一律以只读方式调起（`codex exec --sandbox read-only`、`claude -p --disallowed-tools Edit Write NotebookEdit Bash`），审阅者能翻代码核实，但改不了任何东西。
 
+各家 CLI 的 flag 会变。所以别信文档，直接实测——每个后端发一个只回一个 token 的探针：
+
+```bash
+python3 ~/.claude/skills/wdyt/scripts/wdyt.py --check
+```
+
+```
+Probing backends (a real call each, one token of output):
+  ✓ codex       codex exec --sandbox read-only --ask-for-approval never -   (3.1s)
+  – gemini      not installed (gemini not on PATH)
+  ✓ claude      claude -p --disallowed-tools Edit Write NotebookEdit Bash   (4.3s)
+  ✗ openrouter — OPENROUTER_API_KEY is not set
+```
+
+失败时会打出完整命令行，照着改 `.wdyt.json` 里的 `backends` 就行，不用动代码。
+
 ## 安装
 
 ```bash
@@ -111,6 +127,7 @@ python3 $W --dry-run                    # 只看要发出去什么，不发请�
 | `--no-diff` | 不附带 git diff |
 | `--save PATH` | 顺便存一份到文件 |
 | `--lang` | 指定回复语言，默认跟着对话里人类用的语言走 |
+| `--check` | 逐个实测后端是否真的能用，打印实际执行的命令 |
 | `--session-id` | 手动指定会话 id（自动识别选错时用） |
 | `--transcript PATH` | 审别的会话记录，不是当前这个 |
 
@@ -150,6 +167,16 @@ python3 $W --dry-run                    # 只看要发出去什么，不发请�
 对话记录（含工具输出、文件内容、出现过的代码）会发给被问的那个模型。走 CLI 后端时从你的机器直达厂商；走 `openrouter` 时还会多经过 OpenRouter 一道。
 
 脚本在发送前会清洗常见的凭据格式（OpenAI / Anthropic / OpenRouter key、GitHub token、AWS access key、Google API key、Slack token、JWT、私钥块）。**这是安全网，不是保证。** 在敏感仓库里先跑 `--dry-run` 看一眼再说。
+
+## 开发
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+36 个测试，覆盖 transcript 解析（角色标注、sidechain 过滤、system-reminder 剥离、工具输出截断）、预算裁剪（头尾保留、中段省略、极端情况）、凭据脱敏（正例与误伤）、后端解析（参数顺序、只读 flag、配置覆盖、优先级）。纯 stdlib，不联网、不起子进程。
+
+CI 在 Python 3.9 / 3.11 / 3.13 上跑。
 
 ## License
 

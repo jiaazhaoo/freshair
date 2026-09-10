@@ -2,7 +2,7 @@
 
 > AI 聊久了会变笨。不是模型退化，是它开始在自己的结论上盖楼——每一层都建立在上一层没人质疑过的假设上。
 >
-> 这个 skill 做一件事：把**当前这段对话的原始记录**，原封不动地丢给一个从没参与过的模型，让它说实话。
+> `/wdyt` 做一件事：把**当前这段对话的原始记录**，原封不动地丢给一个从没参与过的模型，让它说实话。
 
 ```
 你 ──── 聊了 60 轮 ────> Claude （已经陷进去了）
@@ -11,12 +11,14 @@
                            ▼
                     session.jsonl（原始记录，未经转述）
                            │
+          ┌────────────────┼────────────────┐
+          ▼                ▼                ▼
+    codex exec        gemini -p        OpenRouter
+   （你的 ChatGPT   （你的 Google      （按量付费）
+     账号，已登录）    账号，已登录）
+          └────────────────┼────────────────┘
                            ▼
-                      OpenRouter
-                     ╱          ╲
-              GPT-5.1        Gemini 3 Pro
-                     ╲          ╱
-                    「你们跑偏了，第 23 轮开始」
+                「你们跑偏了，第 23 轮开始」
 ```
 
 ## 为什么不是又一个 "second opinion" 工具
@@ -28,7 +30,7 @@
 | [consult-llm](https://github.com/raine/consult-llm) | 你手动挑的文件 |
 | [fresheyes](https://github.com/danshapiro/fresheyes) | git diff |
 | [second-opinion](https://github.com/dshills/second-opinion) / [ai-council-mcp](https://github.com/0xakuti/ai-council-mcp) 等 MCP | **Claude 自己写的一段转述** |
-| **what-do-you-think** | **完整的原始对话记录** |
+| **wdyt** | **完整的原始对话记录** |
 
 最后一类的问题最致命：让已经跑偏的那个人去概括"我们在干嘛"，它会自动滤掉自己认为不重要的东西——而那正好就是它跑偏的地方。转述这个动作本身就把要检查的东西弄丢了。
 
@@ -36,80 +38,97 @@
 
 diff 只能看到"改成了什么"，对话记录能看到"为什么改成这样"——包括那句在第 23 轮被随口带过、从此再没人回头看的假设。
 
+## 不用申请 key，用你已经登录的账号
+
+优先走**本机已装好、已登录**的厂商 CLI。请求从你的机器直接发给你本来就在付费的厂商，不经过任何第三方，也不用复制粘贴任何 key。
+
+| 后端 | 认证方式 | 说明 |
+|---|---|---|
+| `codex` | 你的 ChatGPT 登录（Codex CLI） | 首选——真正的局外人 |
+| `gemini` | 你的 Google 登录（Gemini CLI） | 首选——真正的局外人 |
+| `openrouter` | `OPENROUTER_API_KEY` | 想指定任意模型时用，按量计费 |
+| `claude` | 你的 Anthropic 登录（Claude Code CLI） | 兜底。**同厂同权重，盲点也是同一套** |
+
+`--backend auto`（默认）**优先挑跟你不同厂商的**。真落到 `claude` 时会在 stderr 打一条警告说明——同厂互审是这个工具最弱的形态，你有权知道自己拿到的是哪一种。
+
+CLI 后端一律以只读方式调起（`codex exec --sandbox read-only`、`claude -p --disallowed-tools Edit Write NotebookEdit Bash`），审阅者能翻代码核实，但改不了任何东西。
+
 ## 安装
 
 ```bash
 git clone https://github.com/jiaazhaoo/what-do-you-think.git
 cd what-do-you-think
-./install.sh                    # 装到 ~/.claude/skills/（全局可用）
+./install.sh          # 装到 ~/.claude/skills/wdyt，并列出本机可用的后端
 ```
 
-或者只在某个项目里用：
+只在某个项目里用：
 
 ```bash
-cp -r skills/what-do-you-think /你的项目/.claude/skills/
+cp -r skills/wdyt /你的项目/.claude/skills/
 ```
 
-然后配一个 [OpenRouter](https://openrouter.ai/keys) 的 key：
-
-```bash
-export OPENROUTER_API_KEY="sk-or-v1-..."   # 写进 ~/.zshrc 或 ~/.bashrc
-```
-
-只依赖 Python 3.9+ 标准库，没有 `pip install`。
+只依赖 Python 3.9+ 标准库，没有 `pip install`。至少要有一个后端可用——装了 [Codex CLI](https://developers.openai.com/codex/cli) 或 [Gemini CLI](https://github.com/google-gemini/gemini-cli) 并登录过就行，或者配个 [OpenRouter key](https://openrouter.ai/keys)。
 
 ## 用法
 
-在 Claude Code 里，直接说人话就行：
+在 Claude Code 里敲斜杠：
+
+```
+/wdyt
+/wdyt 这个缓存层到底值不值得
+```
+
+或者直接说人话，Claude 会自己调起来：
 
 ```
 问问别的模型我们这么搞对不对
 换个脑子看看这段
 我们是不是跑偏了
-wdyt
 ```
 
-也可以直接跑脚本：
+也可以脱离 Claude Code 直接跑：
 
 ```bash
-# 全面审视当前会话
-python3 ~/.claude/skills/what-do-you-think/scripts/wdyt.py
+W=~/.claude/skills/wdyt/scripts/wdyt.py
 
-# 指定关注点
-python3 ~/.claude/skills/what-do-you-think/scripts/wdyt.py "这个缓存层值不值得"
-
-# 换模型 / 多模型并行
-python3 ~/.claude/skills/what-do-you-think/scripts/wdyt.py -m anthropic/claude-opus-4.6 -m x-ai/grok-4
-
-# 先看看到底要发出去什么，不调 API
-python3 ~/.claude/skills/what-do-you-think/scripts/wdyt.py --dry-run
+python3 $W                              # 自动挑后端，全面审视
+python3 $W "这个缓存层值不值得"           # 指定关注点
+python3 $W -b codex                     # 强制走 ChatGPT
+python3 $W -b openrouter -m x-ai/grok-4 -m anthropic/claude-opus-4.6   # 多模型并行
+python3 $W --dry-run                    # 只看要发出去什么，不发请求
 ```
 
 ### 常用参数
 
 | 参数 | 说明 |
 |---|---|
-| `-m, --model` | OpenRouter 模型 id，可重复或逗号分隔，多个模型并行请求 |
-| `--dry-run` | 打印完整 payload，不发请求 |
+| `-b, --backend` | `auto`（默认）/ `codex` / `gemini` / `claude` / `openrouter` |
+| `-m, --model` | 模型 id，可重复或逗号分隔，多个并行。CLI 后端不填就用它自己的默认模型 |
+| `--dry-run` | 打印完整 payload **和将要执行的命令**，不发请求 |
 | `--thinking` | 带上 Claude 的思考过程（payload 大约翻倍） |
 | `--budget N` | 最多发送多少字符，默认 140000 |
 | `--head-turns N` | 开头永远保留的轮数，默认 6——保住"最初要求"才看得出跑偏 |
 | `--no-diff` | 不附带 git diff |
 | `--save PATH` | 顺便存一份到文件 |
 | `--lang` | 指定回复语言，默认跟着对话里人类用的语言走 |
+| `--session-id` | 手动指定会话 id（自动识别选错时用） |
 | `--transcript PATH` | 审别的会话记录，不是当前这个 |
 
-### 配置默认模型
+### 配置
 
-项目根目录放 `.wdyt.json`，或者 `~/.config/wdyt/config.json`：
+项目根目录放 `.wdyt.json`，或 `~/.config/wdyt/config.json`。完整示例见 [`.wdyt.example.json`](.wdyt.example.json)：
 
 ```json
 {
-  "models": ["openai/gpt-5.1", "google/gemini-3-pro"],
+  "backend": "codex",
   "budget": 140000,
-  "temperature": 0.7
+  "backends": {
+    "codex": { "cmd": ["codex", "exec", "--sandbox", "read-only"], "tail": ["-"] }
+  }
 }
 ```
+
+每个 CLI 后端的命令行都可以在这里覆盖——上游改了 flag，改配置就行，不用动代码。
 
 ## 它到底问了什么
 
@@ -128,7 +147,7 @@ python3 ~/.claude/skills/what-do-you-think/scripts/wdyt.py --dry-run
 
 ## 隐私
 
-对话记录会发给 OpenRouter 和实际提供模型的厂商，其中包含工具输出、文件内容、以及对话里出现过的代码。
+对话记录（含工具输出、文件内容、出现过的代码）会发给被问的那个模型。走 CLI 后端时从你的机器直达厂商；走 `openrouter` 时还会多经过 OpenRouter 一道。
 
 脚本在发送前会清洗常见的凭据格式（OpenAI / Anthropic / OpenRouter key、GitHub token、AWS access key、Google API key、Slack token、JWT、私钥块）。**这是安全网，不是保证。** 在敏感仓库里先跑 `--dry-run` 看一眼再说。
 

@@ -14,6 +14,7 @@ import concurrent.futures
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -25,6 +26,47 @@ from pathlib import Path
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 DEFAULT_MODELS = ["openai/gpt-5.1", "google/gemini-3-pro"]
+
+# Locally installed vendor CLIs, each already signed in as the user. No API key
+# changes hands and no transcript passes through a third party — the request
+# goes straight from this machine to the vendor the user already pays.
+#
+# Every field here is overridable from .wdyt.json under "backends", so a changed
+# upstream flag is a config edit rather than a patch.
+CLI_BACKENDS: dict[str, dict] = {
+    "codex": {
+        # `codex exec` already defaults to a read-only sandbox; say so explicitly
+        # so a future default change cannot hand a reviewer write access.
+        "cmd": ["codex", "exec", "--sandbox", "read-only",
+                "--ask-for-approval", "never"],
+        "tail": ["-"],               # `-` makes codex read the prompt from stdin
+        "model_flag": "-m",
+        "label": "Codex CLI (your ChatGPT login)",
+        "vendor": "openai",
+    },
+    "gemini": {
+        "cmd": ["gemini"],           # headless gemini reads a piped prompt
+        "tail": [],
+        "model_flag": "-m",
+        "label": "Gemini CLI (your Google login)",
+        "vendor": "google",
+    },
+    "claude": {
+        "cmd": ["claude", "-p"],
+        # Variadic, so it goes last — anything after it gets swallowed.
+        "tail": ["--disallowed-tools", "Edit", "Write", "NotebookEdit", "Bash"],
+        "model_flag": "--model",
+        "label": "Claude Code CLI (your Anthropic login)",
+        "vendor": "anthropic",
+    },
+}
+
+# The vendor whose agent is running this skill. Asking it for a second opinion
+# is the weakest version of this tool — same weights, same blind spots — so it
+# is ranked last and called out at runtime when it is what we fall back to.
+HOST_VENDOR = "anthropic" if os.environ.get("CLAUDECODE") else None
+
+AUTO_ORDER = ["codex", "gemini", "claude"]
 
 # Rough budget for the transcript we ship out, in characters.
 DEFAULT_BUDGET = 140_000
@@ -55,9 +97,19 @@ edge cases" is worthless; "the retry loop added around turn 12 never resets \
 granted, that is exactly the thing to poke.
 - If they are actually on the right track, say so plainly and briefly, and spend \
 your words on the sharpest remaining risk instead of manufacturing complaints.
-- You cannot run anything. If a claim in the transcript needs verification, say \
-what you would run to check it.
+{verify_rule}
 """
+
+VERIFY_RULE_API = (
+    "- You cannot run anything. If a claim in the transcript needs "
+    "verification, say what you would run to check it."
+)
+
+VERIFY_RULE_CLI = (
+    "- You are running in the repository this session is about. If a claim in "
+    "the transcript needs checking, open the file and check it rather than "
+    "taking the transcript's word for it. Do not modify anything."
+)
 
 USER_TEMPLATE = """\
 Read the session transcript below, then answer in the structure given at the end.
@@ -109,7 +161,7 @@ def project_dir_for(cwd: Path) -> Path:
     return Path.home() / ".claude" / "projects" / slug
 
 
-def find_transcript(explicit: str | None, cwd: Path) -> Path:
+def find_transcript(explicit: str | None, cwd: Path, session_id: str | None = None) -> Path:
     if explicit:
         p = Path(explicit).expanduser()
         if not p.is_file():
@@ -124,7 +176,8 @@ def find_transcript(explicit: str | None, cwd: Path) -> Path:
         )
 
     session_id = (
-        os.environ.get("CLAUDE_SESSION_ID")
+        session_id
+        or os.environ.get("CLAUDE_SESSION_ID")
         or os.environ.get("CLAUDE_CODE_SESSION_ID")
     )
     if session_id:
@@ -385,8 +438,8 @@ def repo_context(cwd: Path) -> tuple[str, str]:
 # calling OpenRouter
 # --------------------------------------------------------------------------
 
-def ask_model(model: str, system: str, user: str, api_key: str,
-              temperature: float, timeout: int) -> dict:
+def ask_openrouter(model: str, system: str, user: str, api_key: str,
+                   temperature: float, timeout: int) -> dict:
     payload = {
         "model": model,
         "messages": [
@@ -430,6 +483,85 @@ def ask_model(model: str, system: str, user: str, api_key: str,
 
 
 # --------------------------------------------------------------------------
+# calling a locally installed, already-signed-in vendor CLI
+# --------------------------------------------------------------------------
+
+def cli_command(spec: dict, model: str | None) -> list[str]:
+    """Flags first, then the model, then whatever must stay last — a stdin
+    sentinel or a variadic list that would otherwise swallow what follows."""
+    cmd = list(spec["cmd"])
+    if model and spec.get("model_flag"):
+        cmd += [spec["model_flag"], model]
+    return cmd + list(spec.get("tail") or [])
+
+
+def ask_cli(backend: str, spec: dict, model: str | None, system: str, user: str,
+            timeout: int, cwd: Path) -> dict:
+    cmd = cli_command(spec, model)
+    name = f"{backend}" + (f" · {model}" if model else "")
+
+    started = time.time()
+    try:
+        proc = subprocess.run(
+            cmd,
+            input=f"{system}\n\n{user}",
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=cwd,
+        )
+    except FileNotFoundError:
+        return {"model": name, "error": f"{spec['cmd'][0]} is not installed or not on PATH"}
+    except subprocess.TimeoutExpired:
+        return {"model": name, "error": f"timed out after {timeout}s"}
+    except OSError as e:
+        return {"model": name, "error": f"{type(e).__name__}: {e}"}
+
+    out = (proc.stdout or "").strip()
+    if proc.returncode != 0 and not out:
+        err = (proc.stderr or "").strip()[:800] or f"exit code {proc.returncode}"
+        return {
+            "model": name,
+            "error": f"{' '.join(cmd)}\n{err}\n\n"
+                     f"If this backend's flags have changed upstream, override "
+                     f"them in .wdyt.json under backends.{backend}.cmd",
+        }
+    if not out:
+        return {"model": name, "error": f"{' '.join(cmd)} produced no output"}
+
+    return {"model": name, "text": out, "usage": {}, "seconds": round(time.time() - started, 1)}
+
+
+def resolve_backends(config: dict) -> dict[str, dict]:
+    """Built-in CLI backends, with per-repo overrides layered on top."""
+    merged = {k: dict(v) for k, v in CLI_BACKENDS.items()}
+    for name, override in (config.get("backends") or {}).items():
+        merged.setdefault(name, {"label": name, "vendor": name})
+        merged[name].update(override)
+    return merged
+
+
+def detect_backend(backends: dict[str, dict]) -> str:
+    """Pick a backend the user is already signed in to, outsiders first."""
+    order = [b for b in AUTO_ORDER if b in backends]
+    order += [b for b in backends if b not in order]
+
+    non_anthropic = [b for b in order if backends[b].get("vendor") != "anthropic"]
+    for name in non_anthropic:
+        if shutil.which(backends[name]["cmd"][0]):
+            return name
+
+    if os.environ.get("OPENROUTER_API_KEY", "").strip():
+        return "openrouter"
+
+    for name in order:
+        if shutil.which(backends[name]["cmd"][0]):
+            return name
+
+    return "openrouter"
+
+
+# --------------------------------------------------------------------------
 
 def die(msg: str) -> None:
     print(f"wdyt: {msg}", file=sys.stderr)
@@ -450,16 +582,24 @@ def load_config(cwd: Path) -> dict:
 def main() -> None:
     cwd = Path(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()).resolve()
     config = load_config(cwd)
+    backends = resolve_backends(config)
 
     ap = argparse.ArgumentParser(
         prog="wdyt",
-        description="Send this session's transcript to a fresh model on OpenRouter.",
+        description="Send this session's transcript to a model that has not seen it.",
     )
     ap.add_argument("focus", nargs="*",
                     help="what to look at, e.g. 'is the caching layer worth it'")
+    ap.add_argument("-b", "--backend",
+                    default=config.get("backend", "auto"),
+                    help="auto (default) | " + " | ".join(list(backends) + ["openrouter"])
+                         + ". CLI backends use the login you already have; "
+                           "openrouter needs OPENROUTER_API_KEY.")
     ap.add_argument("-m", "--model", action="append", default=[],
-                    help="OpenRouter model id; repeat or comma-separate for several")
+                    help="model id; repeat or comma-separate to run several in "
+                         "parallel. Omit on a CLI backend to use its own default.")
     ap.add_argument("--transcript", help="path to a session .jsonl (default: this session)")
+    ap.add_argument("--session-id", help="session id to look up, if autodetection picks wrong")
     ap.add_argument("--budget", type=int,
                     default=int(config.get("budget", DEFAULT_BUDGET)),
                     help=f"max transcript characters to send (default {DEFAULT_BUDGET})")
@@ -473,17 +613,33 @@ def main() -> None:
     ap.add_argument("--lang", default=config.get("lang", "the language the human used in the transcript"),
                     help="language for the review")
     ap.add_argument("--temperature", type=float, default=float(config.get("temperature", 0.7)))
-    ap.add_argument("--timeout", type=int, default=int(config.get("timeout", 300)))
+    ap.add_argument("--timeout", type=int, default=int(config.get("timeout", 600)))
     ap.add_argument("--dry-run", action="store_true",
-                    help="print exactly what would be sent, call nothing")
+                    help="print exactly what would be sent and how, call nothing")
     ap.add_argument("--save", metavar="PATH", help="also write the review to this file")
     args = ap.parse_args()
 
-    models: list[str] = []
-    for entry in (args.model or config.get("models") or DEFAULT_MODELS):
-        models.extend(m.strip() for m in entry.split(",") if m.strip())
+    backend = args.backend
+    if backend == "auto":
+        backend = detect_backend(backends)
+    if backend != "openrouter" and backend not in backends:
+        die(f"unknown backend {backend!r}. Known: "
+            + ", ".join(list(backends) + ["openrouter", "auto"]))
 
-    path = find_transcript(args.transcript, cwd)
+    is_cli = backend != "openrouter"
+
+    models: list[str | None] = []
+    for entry in args.model:
+        models.extend(m.strip() for m in entry.split(",") if m.strip())
+    if not models:
+        if is_cli:
+            configured = backends[backend].get("models") or []
+            models = list(configured) or [None]   # None = let the CLI choose
+        else:
+            models = list(config.get("models") or DEFAULT_MODELS)
+
+    # ---- build the payload ------------------------------------------------
+    path = find_transcript(args.transcript, cwd, args.session_id)
     turns = parse_transcript(path, keep_thinking=args.thinking)
     if not turns:
         die(f"no readable turns in {path}")
@@ -499,6 +655,9 @@ def main() -> None:
     if focus:
         focus_block = f"The human specifically wants your read on: {focus}\n\n"
 
+    system_msg = SYSTEM_PROMPT.format(
+        verify_rule=VERIFY_RULE_CLI if is_cli else VERIFY_RULE_API
+    )
     user_msg = USER_TEMPLATE.format(
         focus_block=focus_block,
         repo_block=repo_block,
@@ -511,37 +670,72 @@ def main() -> None:
     if not args.no_redact:
         user_msg, redacted_count = redact(user_msg)
 
+    if is_cli:
+        route = (f"{backends[backend].get('label', backend)} — local CLI, "
+                 f"your own login, nothing routed through a third party")
+    else:
+        route = "OpenRouter API"
+
+    same_vendor = is_cli and HOST_VENDOR and backends[backend].get("vendor") == HOST_VENDOR
+    warning = ""
+    if same_vendor:
+        warning = (
+            f"\n⚠️  {backend} is the same vendor as the agent you are already "
+            "talking to. A fresh context window helps, but shared weights mean "
+            "shared blind spots — this is the weak version of a second opinion.\n"
+            "    For a real outsider: install and sign in to codex or gemini, "
+            "or use --backend openrouter.\n"
+        )
+
     header = (
         f"transcript: {path}\n"
         f"turns: {stats['kept_turns']}/{stats['total_turns']} kept"
         + (f", {stats['elided_turns']} elided from the middle" if stats["elided_turns"] else "")
         + f"\npayload: {len(user_msg):,} chars (~{len(user_msg)//4:,} tokens)\n"
-        f"models: {', '.join(models)}\n"
+        f"backend: {route}\n"
+        f"models: {', '.join(m or '(backend default)' for m in models)}\n"
         + (f"redacted: {redacted_count} credential-shaped strings\n" if redacted_count else "")
+        + warning
     )
 
     if args.dry_run:
         print(header)
+        if is_cli:
+            for m in models:
+                print("would run: " + " ".join(cli_command(backends[backend], m))
+                      + "   (prompt on stdin)")
+            print()
         print("=" * 70)
-        print("SYSTEM:\n" + SYSTEM_PROMPT)
+        print("SYSTEM:\n" + system_msg)
         print("=" * 70)
         print("USER:\n" + user_msg)
         return
 
-    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
-    if not api_key:
-        die("OPENROUTER_API_KEY is not set. Get a key at https://openrouter.ai/keys")
+    # ---- dispatch ---------------------------------------------------------
+    if is_cli:
+        binary = backends[backend]["cmd"][0]
+        if not shutil.which(binary):
+            die(f"backend {backend!r} needs {binary!r} on PATH, and it is not there.\n"
+                f"Install and sign in to it, pick another with --backend, "
+                f"or use --backend openrouter.")
+        run = lambda m: ask_cli(backend, backends[backend], m, system_msg,  # noqa: E731
+                                user_msg, args.timeout, cwd)
+    else:
+        api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+        if not api_key:
+            die("OPENROUTER_API_KEY is not set. Either get a key at "
+                "https://openrouter.ai/keys, or use a CLI you are already signed "
+                "in to: --backend codex | gemini | claude")
+        run = lambda m: ask_openrouter(m, system_msg, user_msg, api_key,  # noqa: E731
+                                       args.temperature, args.timeout)
 
     print(header, file=sys.stderr)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(models))) as pool:
-        results = list(pool.map(
-            lambda m: ask_model(m, SYSTEM_PROMPT, user_msg, api_key,
-                                args.temperature, args.timeout),
-            models,
-        ))
+        results = list(pool.map(run, models))
 
-    chunks = [f"# 外部意见 / Outside opinion\n\n_{datetime.now(timezone.utc).astimezone():%Y-%m-%d %H:%M}_\n"]
+    # ---- report -----------------------------------------------------------
+    chunks = [f"# 外部意见 / Outside opinion\n\n_{datetime.now(timezone.utc).astimezone():%Y-%m-%d %H:%M} · via {route}_\n"]
     failures = 0
     for r in results:
         if r.get("error"):

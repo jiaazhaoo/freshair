@@ -1,4 +1,4 @@
-"""Tests for wdyt's pure logic: transcript parsing, budget fitting, redaction,
+"""Tests for freshair's pure logic: transcript parsing, budget fitting, redaction,
 and backend resolution. No network, no subprocesses, no vendor CLIs.
 
     python3 -m unittest discover -s tests -v
@@ -12,10 +12,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-_SCRIPT = Path(__file__).resolve().parent.parent / "skills" / "wdyt" / "scripts" / "wdyt.py"
-_spec = importlib.util.spec_from_file_location("wdyt", _SCRIPT)
-wdyt = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(wdyt)
+_SCRIPT = Path(__file__).resolve().parent.parent / "skills" / "freshair" / "scripts" / "freshair.py"
+_spec = importlib.util.spec_from_file_location("freshair", _SCRIPT)
+freshair = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(freshair)
 
 
 def write_transcript(records) -> Path:
@@ -36,11 +36,11 @@ def assistant(blocks, **kw):
 
 class TestProjectDir(unittest.TestCase):
     def test_slugifies_every_non_alphanumeric(self):
-        got = wdyt.project_dir_for(Path("/home/user/what-do-you-think"))
+        got = freshair.project_dir_for(Path("/home/user/what-do-you-think"))
         self.assertEqual(got.name, "-home-user-what-do-you-think")
 
     def test_dots_and_underscores_are_slugified_too(self):
-        got = wdyt.project_dir_for(Path("/a/b.c_d"))
+        got = freshair.project_dir_for(Path("/a/b.c_d"))
         self.assertEqual(got.name, "-a-b-c-d")
 
 
@@ -50,7 +50,7 @@ class TestParseTranscript(unittest.TestCase):
             user("build me a thing"),
             assistant([{"type": "text", "text": "on it"}]),
         ])
-        turns = wdyt.parse_transcript(path, keep_thinking=False)
+        turns = freshair.parse_transcript(path, keep_thinking=False)
         self.assertEqual([t["role"] for t in turns], ["user", "assistant"])
         self.assertEqual(turns[0]["text"], "build me a thing")
 
@@ -59,23 +59,23 @@ class TestParseTranscript(unittest.TestCase):
         path = write_transcript([
             user([{"type": "tool_result", "content": "total 16\ndrwxr-xr-x"}]),
         ])
-        turns = wdyt.parse_transcript(path, keep_thinking=False)
+        turns = freshair.parse_transcript(path, keep_thinking=False)
         self.assertEqual(turns[0]["role"], "tool")
-        self.assertIn("TOOL OUTPUT", wdyt.render_turns(turns))
+        self.assertIn("TOOL OUTPUT", freshair.render_turns(turns))
 
     def test_mixed_user_turn_stays_human(self):
         path = write_transcript([
             user([{"type": "tool_result", "content": "out"},
                   {"type": "text", "text": "and also, stop"}]),
         ])
-        self.assertEqual(wdyt.parse_transcript(path, False)[0]["role"], "user")
+        self.assertEqual(freshair.parse_transcript(path, False)[0]["role"], "user")
 
     def test_sidechain_records_are_dropped(self):
         path = write_transcript([
             user("main thread"),
             assistant([{"type": "text", "text": "subagent chatter"}], isSidechain=True),
         ])
-        turns = wdyt.parse_transcript(path, keep_thinking=False)
+        turns = freshair.parse_transcript(path, keep_thinking=False)
         self.assertEqual(len(turns), 1)
 
     def test_thinking_is_excluded_by_default_and_included_on_request(self):
@@ -83,15 +83,15 @@ class TestParseTranscript(unittest.TestCase):
             assistant([{"type": "thinking", "thinking": "hmm"},
                        {"type": "text", "text": "answer"}]),
         ])
-        self.assertNotIn("hmm", wdyt.parse_transcript(path, keep_thinking=False)[0]["text"])
-        self.assertIn("hmm", wdyt.parse_transcript(path, keep_thinking=True)[0]["text"])
+        self.assertNotIn("hmm", freshair.parse_transcript(path, keep_thinking=False)[0]["text"])
+        self.assertIn("hmm", freshair.parse_transcript(path, keep_thinking=True)[0]["text"])
 
     def test_system_reminders_are_stripped(self):
         path = write_transcript([
             user("<system-reminder>ignore me</system-reminder>"),
             user("<system-reminder>noise</system-reminder>real question"),
         ])
-        turns = wdyt.parse_transcript(path, keep_thinking=False)
+        turns = freshair.parse_transcript(path, keep_thinking=False)
         self.assertEqual(len(turns), 1)
         self.assertEqual(turns[0]["text"], "real question")
 
@@ -101,21 +101,21 @@ class TestParseTranscript(unittest.TestCase):
             {"type": "summary", "summary": "y"},
             user("only this"),
         ])
-        self.assertEqual(len(wdyt.parse_transcript(path, False)), 1)
+        self.assertEqual(len(freshair.parse_transcript(path, False)), 1)
 
     def test_malformed_lines_do_not_abort_the_parse(self):
         path = write_transcript([user("first")])
         with path.open("a", encoding="utf-8") as fh:
             fh.write("{not json at all\n\n")
             fh.write(json.dumps(user("second")) + "\n")
-        self.assertEqual(len(wdyt.parse_transcript(path, False)), 2)
+        self.assertEqual(len(freshair.parse_transcript(path, False)), 2)
 
     def test_tool_use_keeps_the_meaningful_arguments(self):
         path = write_transcript([
             assistant([{"type": "tool_use", "name": "Bash",
                         "input": {"command": "ls -la", "timeout": 5000}}]),
         ])
-        text = wdyt.parse_transcript(path, False)[0]["text"]
+        text = freshair.parse_transcript(path, False)[0]["text"]
         self.assertIn("[tool: Bash]", text)
         self.assertIn("ls -la", text)
         self.assertNotIn("5000", text)   # noise arguments are dropped
@@ -124,17 +124,17 @@ class TestParseTranscript(unittest.TestCase):
         path = write_transcript([
             user([{"type": "tool_result", "content": "x" * 50_000}]),
         ])
-        text = wdyt.parse_transcript(path, False)[0]["text"]
-        self.assertLess(len(text), wdyt.TOOL_RESULT_CAP + 200)
+        text = freshair.parse_transcript(path, False)[0]["text"]
+        self.assertLess(len(text), freshair.TOOL_RESULT_CAP + 200)
         self.assertIn("elided", text)
 
 
 class TestClip(unittest.TestCase):
     def test_short_text_is_untouched(self):
-        self.assertEqual(wdyt.clip("abc", 100), "abc")
+        self.assertEqual(freshair.clip("abc", 100), "abc")
 
     def test_long_text_keeps_both_ends(self):
-        got = wdyt.clip("A" * 100 + "B" * 100, 40)
+        got = freshair.clip("A" * 100 + "B" * 100, 40)
         self.assertTrue(got.startswith("A"))
         self.assertTrue(got.endswith("B"))
         self.assertIn("elided", got)
@@ -147,7 +147,7 @@ class TestFitToBudget(unittest.TestCase):
 
     def test_everything_fits(self):
         turns = self.make(4, 10)
-        text, stats = wdyt.fit_to_budget(turns, 100_000, 6)
+        text, stats = freshair.fit_to_budget(turns, 100_000, 6)
         self.assertEqual(stats["elided_turns"], 0)
         self.assertEqual(stats["kept_turns"], 4)
         self.assertIn("turn0", text)
@@ -155,7 +155,7 @@ class TestFitToBudget(unittest.TestCase):
 
     def test_over_budget_keeps_the_original_ask_and_the_recent_work(self):
         turns = self.make(60, 500)
-        text, stats = wdyt.fit_to_budget(turns, 6_000, head_turns=3)
+        text, stats = freshair.fit_to_budget(turns, 6_000, head_turns=3)
         self.assertGreater(stats["elided_turns"], 0)
         # the opening — without it you cannot tell whether the work drifted
         self.assertIn("turn0-", text)
@@ -168,13 +168,13 @@ class TestFitToBudget(unittest.TestCase):
 
     def test_head_alone_over_budget_still_keeps_the_original_ask(self):
         turns = self.make(10, 5_000)
-        text, stats = wdyt.fit_to_budget(turns, 1_000, head_turns=6)
+        text, stats = freshair.fit_to_budget(turns, 1_000, head_turns=6)
         self.assertIn("turn0-", text)
         self.assertEqual(stats["kept_turns"], 6)
 
     def test_stats_account_for_every_turn(self):
         turns = self.make(40, 500)
-        _, stats = wdyt.fit_to_budget(turns, 5_000, head_turns=3)
+        _, stats = freshair.fit_to_budget(turns, 5_000, head_turns=3)
         self.assertEqual(stats["kept_turns"] + stats["elided_turns"], stats["total_turns"])
 
 
@@ -190,7 +190,7 @@ class TestRedact(unittest.TestCase):
             "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.dBjftJeZ4CVPmB92K27uhbUJU1p1r",
         ]:
             with self.subTest(secret=secret[:12]):
-                out, n = wdyt.redact(f"the key is {secret} ok")
+                out, n = freshair.redact(f"the key is {secret} ok")
                 self.assertEqual(n, 1)
                 self.assertNotIn(secret, out)
                 self.assertIn("REDACTED", out)
@@ -198,7 +198,7 @@ class TestRedact(unittest.TestCase):
     def test_private_key_blocks_are_scrubbed_whole(self):
         blob = ("-----BEGIN RSA PRIVATE KEY-----\nMIIEow\nlines\n"
                 "-----END RSA PRIVATE KEY-----")
-        out, n = wdyt.redact(blob)
+        out, n = freshair.redact(blob)
         self.assertEqual(n, 1)
         self.assertNotIn("MIIEow", out)
 
@@ -207,41 +207,41 @@ class TestRedact(unittest.TestCase):
                        "AKIA is a prefix",
                        "import sky from 'sky'"]:
             with self.subTest(benign=benign):
-                out, n = wdyt.redact(benign)
+                out, n = freshair.redact(benign)
                 self.assertEqual((out, n), (benign, 0))
 
 
 class TestBackends(unittest.TestCase):
     def test_model_flag_goes_before_the_trailing_stdin_sentinel(self):
-        cmd = wdyt.cli_command(wdyt.CLI_BACKENDS["codex"], "gpt-5.1")
+        cmd = freshair.cli_command(freshair.CLI_BACKENDS["codex"], "gpt-5.1")
         self.assertEqual(cmd[-1], "-", "the stdin sentinel must stay last")
         self.assertLess(cmd.index("-m"), cmd.index("-"))
 
     def test_model_flag_goes_before_a_variadic_tail(self):
-        cmd = wdyt.cli_command(wdyt.CLI_BACKENDS["claude"], "opus")
+        cmd = freshair.cli_command(freshair.CLI_BACKENDS["claude"], "opus")
         self.assertLess(cmd.index("--model"), cmd.index("--disallowed-tools"))
 
     def test_no_model_means_no_model_flag(self):
-        cmd = wdyt.cli_command(wdyt.CLI_BACKENDS["codex"], None)
+        cmd = freshair.cli_command(freshair.CLI_BACKENDS["codex"], None)
         self.assertNotIn("-m", cmd)
         self.assertEqual(cmd[-1], "-")
 
     def test_cli_backends_are_invoked_read_only(self):
-        self.assertIn("read-only", wdyt.CLI_BACKENDS["codex"]["cmd"])
-        claude = wdyt.cli_command(wdyt.CLI_BACKENDS["claude"], None)
+        self.assertIn("read-only", freshair.CLI_BACKENDS["codex"]["cmd"])
+        claude = freshair.cli_command(freshair.CLI_BACKENDS["claude"], None)
         for tool in ("Edit", "Write", "Bash"):
             self.assertIn(tool, claude)
 
     def test_config_overrides_a_builtin_backend(self):
-        merged = wdyt.resolve_backends(
+        merged = freshair.resolve_backends(
             {"backends": {"codex": {"cmd": ["codex", "exec", "--new-flag"]}}}
         )
         self.assertEqual(merged["codex"]["cmd"], ["codex", "exec", "--new-flag"])
         self.assertEqual(merged["codex"]["model_flag"], "-m")   # untouched fields survive
-        self.assertEqual(wdyt.CLI_BACKENDS["codex"]["cmd"][2], "--sandbox")  # no mutation
+        self.assertEqual(freshair.CLI_BACKENDS["codex"]["cmd"][2], "--sandbox")  # no mutation
 
-    def test_config_can_add_a_backend_wdyt_has_never_heard_of(self):
-        merged = wdyt.resolve_backends(
+    def test_config_can_add_a_backend_freshair_has_never_heard_of(self):
+        merged = freshair.resolve_backends(
             {"backends": {"llm": {"cmd": ["llm", "-m", "x"], "vendor": "simonw"}}}
         )
         self.assertIn("llm", merged)
@@ -252,9 +252,9 @@ class TestDetectBackend(unittest.TestCase):
         env = dict(os.environ)
         env["OPENROUTER_API_KEY"] = key
         with mock.patch.dict(os.environ, env, clear=True), \
-             mock.patch.object(wdyt.shutil, "which",
+             mock.patch.object(freshair.shutil, "which",
                                side_effect=lambda b: f"/usr/bin/{b}" if b in installed else None):
-            return wdyt.detect_backend(wdyt.resolve_backends({}))
+            return freshair.detect_backend(freshair.resolve_backends({}))
 
     def test_prefers_a_different_vendor_over_the_host(self):
         self.assertEqual(self.detect({"codex", "claude"}), "codex")
@@ -274,24 +274,30 @@ class TestDetectBackend(unittest.TestCase):
 
 
 class TestLoadConfig(unittest.TestCase):
+    def test_the_pre_rename_config_name_still_works(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / ".wdyt.json").write_text('{"backend": "gemini"}', encoding="utf-8")
+            with mock.patch.object(freshair.Path, "home", return_value=Path(d)):
+                self.assertEqual(freshair.load_config(Path(d))["backend"], "gemini")
+
     def test_repo_config_wins_over_the_user_wide_one(self):
         with tempfile.TemporaryDirectory() as d:
-            (Path(d) / ".wdyt.json").write_text('{"backend": "codex"}', encoding="utf-8")
-            self.assertEqual(wdyt.load_config(Path(d))["backend"], "codex")
+            (Path(d) / ".freshair.json").write_text('{"backend": "codex"}', encoding="utf-8")
+            self.assertEqual(freshair.load_config(Path(d))["backend"], "codex")
 
     def test_missing_config_is_not_an_error(self):
         with tempfile.TemporaryDirectory() as d:
-            with mock.patch.object(wdyt.Path, "home", return_value=Path(d)):
-                self.assertEqual(wdyt.load_config(Path(d)), {})
+            with mock.patch.object(freshair.Path, "home", return_value=Path(d)):
+                self.assertEqual(freshair.load_config(Path(d)), {})
 
     def test_malformed_config_is_skipped_rather_than_crashing(self):
         with tempfile.TemporaryDirectory() as d:
-            (Path(d) / ".wdyt.json").write_text("{oops", encoding="utf-8")
-            with mock.patch.object(wdyt.Path, "home", return_value=Path(d)):
-                self.assertEqual(wdyt.load_config(Path(d)), {})
+            (Path(d) / ".freshair.json").write_text("{oops", encoding="utf-8")
+            with mock.patch.object(freshair.Path, "home", return_value=Path(d)):
+                self.assertEqual(freshair.load_config(Path(d)), {})
 
     def test_the_shipped_example_config_is_valid(self):
-        example = Path(__file__).resolve().parent.parent / ".wdyt.example.json"
+        example = Path(__file__).resolve().parent.parent / ".freshair.example.json"
         json.loads(example.read_text(encoding="utf-8"))
 
 
@@ -315,7 +321,7 @@ class TestFreshMode(unittest.TestCase):
         ]
 
     def test_goal_is_the_human_instructions_and_nothing_else(self):
-        goal = wdyt.extract_goal(self.turns(), 0)
+        goal = freshair.extract_goal(self.turns(), 0)
         self.assertIn("build a thing that does X", goal)
         self.assertIn("also make it fast", goal)
         # the agent's own reasoning is what we are trying not to ship
@@ -323,43 +329,43 @@ class TestFreshMode(unittest.TestCase):
         self.assertNotIn("switching to B", goal)
 
     def test_goal_turns_caps_the_instructions(self):
-        goal = wdyt.extract_goal(self.turns(), 1)
+        goal = freshair.extract_goal(self.turns(), 1)
         self.assertIn("build a thing", goal)
         self.assertNotIn("also make it fast", goal)
 
     def test_harness_boilerplate_is_not_a_goal(self):
         turns = [{"role": "user", "text": "Continue from where you left off.", "ts": ""},
                  {"role": "user", "text": "the real ask", "ts": ""}]
-        goal = wdyt.extract_goal(turns, 0)
+        goal = freshair.extract_goal(turns, 0)
         self.assertNotIn("Continue from where", goal)
         self.assertIn("the real ask", goal)
         self.assertEqual(goal.count("--- instruction"), 1)
 
     def test_goal_survives_a_session_with_no_human_turns(self):
-        self.assertIn("no human instructions", wdyt.extract_goal(
+        self.assertIn("no human instructions", freshair.extract_goal(
             [{"role": "assistant", "text": "hi", "ts": ""}], 0))
 
     def test_claim_is_the_latest_agent_prose_without_the_tool_log(self):
-        claim = wdyt.extract_claim(self.turns())
+        claim = freshair.extract_claim(self.turns())
         self.assertEqual(claim, "B is done and tested")
         self.assertNotIn("[tool:", claim)
 
     def test_claim_skips_turns_that_are_only_tool_calls(self):
         turns = [{"role": "assistant", "text": "the real summary", "ts": ""},
                  {"role": "assistant", "text": "[tool: Bash] {}", "ts": ""}]
-        self.assertEqual(wdyt.extract_claim(turns), "the real summary")
+        self.assertEqual(freshair.extract_claim(turns), "the real summary")
 
     def test_no_agent_turns_means_no_claim(self):
-        self.assertEqual(wdyt.extract_claim([{"role": "user", "text": "x", "ts": ""}]), "")
+        self.assertEqual(freshair.extract_claim([{"role": "user", "text": "x", "ts": ""}]), "")
 
 
 class TestSelfContamination(unittest.TestCase):
     """A CLI backend logs its own session. None of it may come back as input."""
 
     def test_a_logged_payload_is_not_read_back_as_a_human_instruction(self):
-        payload = wdyt.SYSTEM_PROMPT_FRESH.format(verify_rule="") + "\n\nreview this"
+        payload = freshair.SYSTEM_PROMPT_FRESH.format(verify_rule="") + "\n\nreview this"
         path = write_transcript([user("the actual goal"), user(payload)])
-        turns = wdyt.parse_transcript(path, keep_thinking=False)
+        turns = freshair.parse_transcript(path, keep_thinking=False)
         self.assertEqual(len(turns), 1)
         self.assertEqual(turns[0]["text"], "the actual goal")
 
@@ -369,17 +375,27 @@ class TestSelfContamination(unittest.TestCase):
             user("You are an outside reviewer. You were NOT part of the "
                  "conversation you are about to read."),
         ])
-        self.assertEqual(len(wdyt.parse_transcript(path, False)), 1)
+        self.assertEqual(len(freshair.parse_transcript(path, False)), 1)
+
+    def test_payloads_from_before_the_rename_are_still_recognised(self):
+        """Sessions polluted while the tool was called wdyt are still out there."""
+        path = write_transcript([
+            user("the actual goal"),
+            user("<!-- wdyt-review-request: generated by the wdyt tool -->\nreview this"),
+        ])
+        turns = freshair.parse_transcript(path, keep_thinking=False)
+        self.assertEqual(len(turns), 1)
+        self.assertEqual(turns[0]["text"], "the actual goal")
 
     def test_the_marker_travels_with_both_system_prompts(self):
-        for prompt in (wdyt.SYSTEM_PROMPT_FRESH, wdyt.SYSTEM_PROMPT_FULL):
-            self.assertIn(wdyt.WDYT_MARKER, prompt)
+        for prompt in (freshair.SYSTEM_PROMPT_FRESH, freshair.SYSTEM_PROMPT_FULL):
+            self.assertIn(freshair.FRESHAIR_MARKER, prompt)
 
     def test_a_review_session_is_recognised_as_our_own(self):
         ours = write_transcript([user("a genuine session")])
-        childs = write_transcript([user(wdyt.MARKER_LINE + "review this")])
-        self.assertFalse(wdyt.is_wdyt_child(ours))
-        self.assertTrue(wdyt.is_wdyt_child(childs))
+        childs = write_transcript([user(freshair.MARKER_LINE + "review this")])
+        self.assertFalse(freshair.is_freshair_child(ours))
+        self.assertTrue(freshair.is_freshair_child(childs))
 
     def test_child_env_drops_this_session_identity_but_keeps_the_rest(self):
         with mock.patch.dict(os.environ,
@@ -388,18 +404,55 @@ class TestSelfContamination(unittest.TestCase):
                               "PATH": "/usr/bin",
                               "ANTHROPIC_API_KEY": "secret"},
                              clear=True):
-            env = wdyt.child_env()
+            env = freshair.child_env()
         self.assertNotIn("CLAUDE_CODE_SESSION_ID", env)
         self.assertNotIn("CLAUDE_PROJECT_DIR", env)
         self.assertEqual(env["PATH"], "/usr/bin")
         self.assertEqual(env["ANTHROPIC_API_KEY"], "secret", "auth must survive")
 
     def test_repo_is_handed_back_as_a_readable_dir_where_supported(self):
-        cmd = wdyt.cli_command(wdyt.CLI_BACKENDS["claude"], None, Path("/repo"))
+        cmd = freshair.cli_command(freshair.CLI_BACKENDS["claude"], None, Path("/repo"))
         self.assertIn("--add-dir", cmd)
         self.assertEqual(cmd[cmd.index("--add-dir") + 1], "/repo")
 
     def test_backends_without_a_dir_flag_are_unaffected(self):
-        cmd = wdyt.cli_command(wdyt.CLI_BACKENDS["codex"], None, Path("/repo"))
+        cmd = freshair.cli_command(freshair.CLI_BACKENDS["codex"], None, Path("/repo"))
         self.assertNotIn("/repo", cmd)
         self.assertEqual(cmd[-1], "-")
+
+
+class TestGoalHygiene(unittest.TestCase):
+    """What counts as an instruction, and what is just session noise."""
+
+    def goal(self, texts, cap=0):
+        turns = [{"role": "user", "text": t, "ts": ""} for t in texts]
+        return freshair.goal_instructions(turns, cap)
+
+    def test_harness_notices_are_not_instructions(self):
+        kept = self.goal(["[Request interrupted by user]", "the real ask"])
+        self.assertEqual(kept, ["the real ask"])
+
+    def test_a_bracketed_line_inside_a_real_message_is_kept(self):
+        msg = "[note] this is still a genuine instruction with content"
+        self.assertEqual(self.goal([msg]), [msg])
+
+    def test_a_retyped_instruction_supersedes_the_fragment_it_extends(self):
+        kept = self.goal([
+            "add the thing to the project",
+            "[Request interrupted by user]",
+            "add the thing to the project, and call it FreshAir",
+        ])
+        self.assertEqual(kept, ["add the thing to the project, and call it FreshAir"])
+
+    def test_two_genuinely_different_asks_both_survive(self):
+        kept = self.goal(["make it fast", "make it correct"])
+        self.assertEqual(len(kept), 2)
+
+    def test_the_reported_count_matches_what_is_actually_sent(self):
+        turns = [{"role": "user", "text": t, "ts": ""} for t in
+                 ["real one", "Continue from where you left off.",
+                  "[Request interrupted by user]", "real two"]]
+        kept = freshair.goal_instructions(turns, 0)
+        rendered = freshair.extract_goal(turns, 0)
+        self.assertEqual(len(kept), rendered.count("--- instruction "))
+        self.assertEqual(len(kept), 2)

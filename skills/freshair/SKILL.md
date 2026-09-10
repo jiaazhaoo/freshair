@@ -1,14 +1,19 @@
 ---
-name: wdyt
-description: Get an outside opinion on the current work from a model that has not seen this conversation. By default it sends only the original goal and the current state, so the reviewer cannot be anchored by the reasoning that got you here. Routes through a locally installed CLI the user is already signed in to (Codex, Gemini, Claude) or OpenRouter. Use when the conversation has gone long and circular, when the same fix keeps failing, before committing to a big refactor, or whenever the user asks for a second opinion, outside eyes, a sanity check, or says things like "问问别的模型", "换个思路", "我们是不是跑偏了", "wdyt", "越聊越笨". Not for ordinary code review of a diff.
+name: FreshAir
+description: Get an outside opinion on the current work from a model that has not seen this conversation. By default it sends only the original goal and the current state, so the reviewer cannot be anchored by the reasoning that got you here. Routes through a locally installed CLI the user is already signed in to (Codex, Gemini, Claude) or OpenRouter. Use when the conversation has gone long and circular, when the same fix keeps failing, before committing to a big refactor, or whenever the user asks for a second opinion, outside eyes, a sanity check, or says things like "问问别的模型", "换个思路", "我们是不是跑偏了", "freshair", "fresh air", "新鲜空气", "越聊越笨", "钻牛角尖". Also good on a long task before committing to a direction. Not for ordinary code review of a diff.
 argument-hint: [what to look at]
 allowed-tools: Bash(python3 *)
 ---
 
-# wdyt — what do you think
+# FreshAir
 
-Get the work in front of a model that has never seen this conversation, and
-relay what it says back.
+Open a window. Put the work in front of a model that has never seen this
+conversation, and relay what it says back.
+
+The problem this exists for: on a long task an agent gets narrower, not
+smarter. It builds on its own earlier conclusions, stops generating options, and
+cannot see this from the inside — which is why it has to be a different model,
+in a different context window, that never watched it get here.
 
 ## What actually gets sent, and why
 
@@ -35,7 +40,7 @@ session `.jsonl` off disk itself. Just run it.
 ## Running it
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/wdyt.py" --session-id "${CLAUDE_SESSION_ID}" $ARGUMENTS
+python3 "${CLAUDE_SKILL_DIR}/scripts/freshair.py" --session-id "${CLAUDE_SESSION_ID}" $ARGUMENTS
 ```
 
 That is the whole invocation. It finds the transcript, picks a backend the user
@@ -45,7 +50,7 @@ Add a focus when the user pointed at something specific — it goes in
 `$ARGUMENTS`:
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/wdyt.py" "这个缓存层到底值不值得"
+python3 "${CLAUDE_SKILL_DIR}/scripts/freshair.py" "这个缓存层到底值不值得"
 ```
 
 ### Backends
@@ -107,7 +112,7 @@ exact command line it used, which separates "not installed" from "installed but
 the flags have changed upstream". Relay what it says. Do not go hunting through
 the user's files for an API key.
 
-Per-repo defaults live in `.wdyt.json` (see `.wdyt.example.json` in the repo
+Per-repo defaults live in `.freshair.json` (see `.freshair.example.json` in the repo
 root). Every backend's command line is overridable there, so a changed upstream
 flag is a config edit, not a code change.
 

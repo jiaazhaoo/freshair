@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # wdyt ships as a stdlib-only script, so it has to run on whatever
+        # freshair ships as a stdlib-only script, so it has to run on whatever
         # python a contributor's machine already has.
         python-version: ["3.9", "3.11", "3.13"]
     steps:
@@ -21,4 +21,4 @@ jobs:
       - name: Run tests
         run: python3 -m unittest discover -s tests -v
       - name: Check the script parses and its help works
-        run: python3 skills/wdyt/scripts/wdyt.py --help
+        run: python3 skills/freshair/scripts/freshair.py --help

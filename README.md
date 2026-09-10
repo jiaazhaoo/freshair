@@ -1,13 +1,13 @@
-# what-do-you-think
+# FreshAir
 
-> AI 聊久了会变笨。不是模型退化，是它开始在自己的结论上盖楼——每一层都建立在上一层没人质疑过的假设上。
+> 长任务里的 AI 会越来越狭隘。不是模型退化，是它开始在自己的结论上盖楼——每一层都建立在上一层没人质疑过的假设上，而它在里面看不见这件事。
 >
-> `/wdyt` 做一件事：把**最初的目标**和**现在的成果**交给一个从没参与过的模型，中间那一百轮自我论证全部丢掉，让它从零推一遍。
+> `/freshair` 开一扇窗：把**最初的目标**和**现在的成果**交给一个从没参与过这段对话的 AI，中间那一百轮自我论证全部丢掉，让它在全新的上下文窗口里从零推一遍。
 
 ```
 你 ──── 聊了 60 轮 ────> Claude （已经陷进去了）
                            │
-                           │  /wdyt
+                           │  /freshair
                            ▼
                     session.jsonl
                            │
@@ -45,7 +45,7 @@
 | [consult-llm](https://github.com/raine/consult-llm) | 你手动挑的文件 |
 | [fresheyes](https://github.com/danshapiro/fresheyes) | git diff |
 | [second-opinion](https://github.com/dshills/second-opinion) / [ai-council-mcp](https://github.com/0xakuti/ai-council-mcp) 等 MCP | **Claude 自己写的一段转述** |
-| **wdyt** | **人类原话说的目标 + 当前 diff，agent 的自述一句不发** |
+| **FreshAir** | **人类原话说的目标 + 当前 diff，agent 的自述一句不发** |
 
 最后一类的问题最致命：让已经跑偏的那个人去概括"我们在干嘛"，它会自动滤掉自己认为不重要的东西——而那正好就是它跑偏的地方。转述这个动作本身就把要检查的东西弄丢了。
 
@@ -71,7 +71,7 @@ CLI 后端一律以只读方式调起（`codex exec --sandbox read-only`、`clau
 各家 CLI 的 flag 会变。所以别信文档，直接实测——每个后端发一个只回一个 token 的探针：
 
 ```bash
-python3 ~/.claude/skills/wdyt/scripts/wdyt.py --check
+python3 ~/.claude/skills/freshair/scripts/freshair.py --check
 ```
 
 ```
@@ -82,20 +82,22 @@ Probing backends (a real call each, one token of output):
   ✗ openrouter — OPENROUTER_API_KEY is not set
 ```
 
-失败时会打出完整命令行，照着改 `.wdyt.json` 里的 `backends` 就行，不用动代码。
+失败时会打出完整命令行，照着改 `.freshair.json` 里的 `backends` 就行，不用动代码。
 
 ## 安装
+
+仓库名是 `what-do-you-think`，工具名是 FreshAir——同一个东西，不是拿错了地址。
 
 ```bash
 git clone https://github.com/jiaazhaoo/what-do-you-think.git
 cd what-do-you-think
-./install.sh          # 装到 ~/.claude/skills/wdyt，并列出本机可用的后端
+./install.sh          # 装到 ~/.claude/skills/freshair，并列出本机可用的后端
 ```
 
 只在某个项目里用：
 
 ```bash
-cp -r skills/wdyt /你的项目/.claude/skills/
+cp -r skills/freshair /你的项目/.claude/skills/   # 目录名决定斜杠命令，别改
 ```
 
 只依赖 Python 3.9+ 标准库，没有 `pip install`。至少要有一个后端可用——装了 [Codex CLI](https://developers.openai.com/codex/cli) 或 [Gemini CLI](https://github.com/google-gemini/gemini-cli) 并登录过就行，或者配个 [OpenRouter key](https://openrouter.ai/keys)。
@@ -105,8 +107,8 @@ cp -r skills/wdyt /你的项目/.claude/skills/
 在 Claude Code 里敲斜杠：
 
 ```
-/wdyt
-/wdyt 这个缓存层到底值不值得
+/freshair
+/freshair 这个缓存层到底值不值得
 ```
 
 或者直接说人话，Claude 会自己调起来：
@@ -120,7 +122,7 @@ cp -r skills/wdyt /你的项目/.claude/skills/
 也可以脱离 Claude Code 直接跑：
 
 ```bash
-W=~/.claude/skills/wdyt/scripts/wdyt.py
+W=~/.claude/skills/freshair/scripts/freshair.py
 
 python3 $W                              # 自动挑后端，全面审视
 python3 $W "这个缓存层值不值得"           # 指定关注点
@@ -151,7 +153,7 @@ python3 $W --dry-run                    # 只看要发出去什么，不发请�
 
 ### 配置
 
-项目根目录放 `.wdyt.json`，或 `~/.config/wdyt/config.json`。完整示例见 [`.wdyt.example.json`](.wdyt.example.json)：
+项目根目录放 `.freshair.json`，或 `~/.config/freshair/config.json`。完整示例见 [`.freshair.example.json`](.freshair.example.json)：
 
 ```json
 {

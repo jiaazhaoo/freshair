@@ -1,4 +1,4 @@
 __pycache__/
 *.pyc
-.wdyt.json
-wdyt-review*.md
+.freshair.json
+freshair-review*.md

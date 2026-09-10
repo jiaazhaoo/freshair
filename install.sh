@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Install the wdyt skill into ~/.claude/skills/, then report which backends
+# Install the FreshAir skill into ~/.claude/skills/, then report which backends
 # this machine is already signed in to.
 set -euo pipefail
 
-src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/skills/wdyt"
-dest="${HOME}/.claude/skills/wdyt"
+src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/skills/freshair"
+dest="${HOME}/.claude/skills/freshair"
 
 if [ ! -d "$src" ]; then
   echo "install.sh: cannot find $src" >&2
@@ -17,7 +17,7 @@ if [ -e "$dest" ] || [ -L "$dest" ]; then
 fi
 ln -s "$src" "$dest"
 echo "Linked $dest -> $src"
-echo "Invoke it in Claude Code with /wdyt"
+echo "Invoke it in Claude Code with /freshair"
 echo
 
 echo "Backends available on this machine:"
@@ -58,5 +58,5 @@ Codex CLI or Gemini CLI, or set OPENROUTER_API_KEY, to get a real outsider.
 MSG
 else
   echo
-  echo "Ready. Try /wdyt in a session that has been going for a while."
+  echo "Ready. Try /freshair in a session that has been going for a while."
 fi

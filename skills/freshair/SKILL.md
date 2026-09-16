@@ -90,6 +90,7 @@ happen without leaving the session, which is the whole reason it matters:
 | The user types | You run |
 |---|---|
 | `/freshair --login` | `python3 "$FA" --login` |
+| `/freshair --login --code abc123` | `python3 "$FA" --login --code abc123` |
 | `/freshair --check` | `python3 "$FA" --check` |
 | `/freshair --show-config` | `python3 "$FA" --show-config` |
 | `/freshair -b codex` | `python3 "$FA" -b codex` |
@@ -101,10 +102,12 @@ browser, the user approves, the key is stored, and they never touch a terminal
 or see the key. Relay the printed URL if the script says it could not open a
 browser.
 
-One caveat worth stating when it comes up: `--login` opens a browser on the
-machine the script runs on. In a local session that is the user's own machine.
-In a cloud or remote session it is not, and the script prints the URL and the
-port-forwarding line instead.
+`--login` opens a browser on the machine the script runs on. In a local session
+that is the user's own. In a cloud or web session it is not, and the script
+detects that and switches by itself to a two-step flow: relay the URL it prints,
+then run `--login --code <what they paste>` when they come back with it. Their
+browser will fail to load a localhost page after approving — that is expected,
+and the code is in its address bar.
 
 ### Which session it reads
 

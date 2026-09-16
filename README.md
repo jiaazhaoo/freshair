@@ -198,6 +198,12 @@ A browser opens, you approve, and the key goes straight to disk. Any flag works
 this way: `/freshair --check`, `/freshair --show-config`, `/freshair -b codex`.
 From a terminal the same thing is `freshair --login`.
 
+In a cloud or web session the browser is not on your machine, so the callback
+cannot come back. FreshAir detects that and switches to two steps by itself: it
+prints a URL, and after you approve — your browser will fail to load a localhost
+page, which is expected — you paste the `code=` from the address bar into
+`/freshair --login --code <code>`.
+
 It opens OpenRouter, waits on a loopback callback, and stores the key in
 `~/.config/freshair/config.json` with mode 600. Nothing to copy, nothing pasted
 into a shell, no key in your history — it is never displayed at all. The flow is
@@ -380,7 +386,7 @@ out.
 python3 -m unittest discover -s tests -v
 ```
 
-107 tests covering transcript parsing for both hosts (Claude Code, and Codex in
+114 tests covering transcript parsing for both hosts (Claude Code, and Codex in
 both its record generations) (role labelling, sidechain filtering,
 system-reminder stripping, tool-output capping), goal extraction (human
 instructions only, boilerplate and harness notices rejected, retyped

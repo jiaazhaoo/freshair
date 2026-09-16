@@ -32,6 +32,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -1331,7 +1332,79 @@ def exchange_code(code: str, verifier: str, timeout: int) -> str:
     return key
 
 
-def openrouter_login(timeout: int) -> int:
+PENDING_LOGIN = "login-pending.json"
+PENDING_TTL = 900   # seconds; a half-finished login should not linger
+
+
+def pending_path() -> Path:
+    return USER_CONFIG.parent / PENDING_LOGIN
+
+
+def save_pending(verifier: str) -> None:
+    pending_path().parent.mkdir(parents=True, exist_ok=True)
+    pending_path().write_text(
+        json.dumps({"code_verifier": verifier, "at": time.time()}), encoding="utf-8")
+    try:
+        pending_path().chmod(0o600)
+    except OSError:
+        pass
+
+
+def take_pending() -> str:
+    path = pending_path()
+    if not path.is_file():
+        die("no login in progress. Start one with --login, approve in the "
+            "browser, then pass the code back with --login --code ...")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        path.unlink(missing_ok=True)
+        die("the pending login was unreadable. Run --login again.")
+    path.unlink(missing_ok=True)
+    if time.time() - float(data.get("at", 0)) > PENDING_TTL:
+        die("that login attempt expired. Run --login again.")
+    return str(data.get("code_verifier", ""))
+
+
+def login_manually(timeout: int) -> int:
+    """For a session whose browser is not on the user's machine.
+
+    Nothing can listen on the user's localhost from here, so the callback is
+    never delivered. The code still reaches them: OpenRouter redirects their
+    browser to a localhost URL that fails to load, and the address bar holds it.
+    """
+    verifier, challenge = pkce_pair()
+    save_pending(verifier)
+
+    url = OPENROUTER_AUTH_URL + "?" + urllib.parse.urlencode({
+        "callback_url": "http://localhost:8765/callback",
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    })
+    print("This session runs on a different machine from your browser, so the\n"
+          "callback cannot reach it. Two steps instead:\n")
+    print(f"1. Open this and approve:\n\n   {url}\n")
+    print("2. Your browser will then fail to load a localhost page. That is\n"
+          "   expected. Copy the code= value out of its address bar and run:\n")
+    print("       /freshair --login --code PASTE_IT_HERE\n")
+    print(f"(The attempt expires in {PENDING_TTL // 60} minutes.)")
+    return 0
+
+
+def finish_login(code: str, timeout: int) -> int:
+    verifier = take_pending()
+    key = exchange_code(code.strip(), verifier, timeout)
+    path = write_user_config({"api_key": key})
+    print(f"Connected. Key saved to {path} (mode 600); it was never displayed.")
+    print("Try it:  /freshair --check")
+    return 0
+
+
+def openrouter_login(timeout: int, manual: bool = False) -> int:
+    # A cloud or web session runs somewhere the user's browser cannot reach.
+    if manual or os.environ.get("CLAUDE_CODE_REMOTE") or os.environ.get("SSH_CONNECTION"):
+        return login_manually(timeout)
+
     verifier, challenge = pkce_pair()
     callback, (server, received) = await_oauth_code(timeout)
 
@@ -1351,9 +1424,8 @@ def openrouter_login(timeout: int) -> int:
           "Open this in a browser on THIS machine:")
     print(f"\n  {url}\n")
     if not opened:
-        print("(If you are on a remote machine, forward the callback port first:\n"
-              f"    ssh -L {urllib.parse.urlparse(callback).port}:"
-              f"localhost:{urllib.parse.urlparse(callback).port} <host>)\n")
+        print("(No browser here. If this machine is not the one you are sitting\n"
+              " at, stop and use:  --login --manual)\n")
     print(f"Waiting up to {timeout}s for the callback...", flush=True)
 
     server.handle_request()   # blocks until the browser calls back, or times out
@@ -1364,7 +1436,9 @@ def openrouter_login(timeout: int) -> int:
     code = received.get("code", "")
     if not code:
         die("no authorization code came back — the browser never reached the "
-            "callback, or it timed out. Nothing was saved.")
+            "callback, or it timed out. Nothing was saved.\n"
+            "If your browser is on a different machine from this session, use:\n"
+            "    --login --manual")
 
     key = exchange_code(code, verifier, timeout)
     path = write_user_config({"api_key": key})
@@ -1481,6 +1555,12 @@ def main() -> None:
                     help="remember this call's --backend/--model choice. Bare, "
                          "it becomes the default; with a NAME it becomes a "
                          "profile you select with -p NAME.")
+    ap.add_argument("--manual", action="store_true",
+                    help="with --login: print the URL and take the code back by "
+                         "hand, for when your browser is on another machine")
+    ap.add_argument("--code", metavar="CODE",
+                    help="with --login: finish a --manual login using the code "
+                         "from your browser's address bar")
     ap.add_argument("--login", action="store_true",
                     help="connect OpenRouter in the browser — you approve, the "
                          "key is stored here, you never see or paste it")
@@ -1498,8 +1578,10 @@ def main() -> None:
     ap.add_argument("--save", metavar="PATH", help="also write the review to this file")
     args = ap.parse_args()
 
-    if args.login:
-        sys.exit(openrouter_login(args.timeout))
+    if args.login or args.code:
+        if args.code:
+            sys.exit(finish_login(args.code, args.timeout))
+        sys.exit(openrouter_login(args.timeout, manual=args.manual))
 
     if args.set_key:
         path = write_user_config({"api_key": args.set_key.strip()})

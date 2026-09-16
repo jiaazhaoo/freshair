@@ -934,6 +934,12 @@ class TestOpenRouterLogin(unittest.TestCase):
         d = Path(stack.enter_context(tempfile.TemporaryDirectory()))
         stack.enter_context(mock.patch.object(
             freshair, "USER_CONFIG", d / ".config" / "freshair" / "config.json"))
+        # This suite covers the browser path. The markers that divert to the
+        # manual one are set in some real environments, including the container
+        # these tests run in, so they are cleared deliberately.
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("CLAUDE_CODE_REMOTE", "SSH_CONNECTION")}
+        stack.enter_context(mock.patch.dict(os.environ, env, clear=True))
         return d
 
     def test_the_key_is_stored_and_never_printed(self):
@@ -1013,3 +1019,110 @@ class TestOpenRouterLogin(unittest.TestCase):
             self.assertEqual(server.server_address[0], "127.0.0.1")
         finally:
             server.server_close()
+
+
+class TestManualLogin(unittest.TestCase):
+    """When the browser is on a different machine from the session."""
+
+    def home(self, stack):
+        d = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        stack.enter_context(mock.patch.object(
+            freshair, "USER_CONFIG", d / ".config" / "freshair" / "config.json"))
+        return d
+
+    def test_a_cloud_session_does_not_wait_on_a_callback_it_cannot_get(self):
+        import contextlib, io
+        with contextlib.ExitStack() as stack:
+            self.home(stack)
+            stack.enter_context(mock.patch.dict(
+                os.environ, {"CLAUDE_CODE_REMOTE": "true"}, clear=True))
+            called = {"server": False}
+            stack.enter_context(mock.patch.object(
+                freshair, "await_oauth_code",
+                lambda *a, **k: called.update(server=True)))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = freshair.openrouter_login(timeout=600)
+        self.assertEqual(rc, 0)
+        self.assertFalse(called["server"], "must not bind a callback nobody can reach")
+        self.assertIn("--login --code", out.getvalue())
+
+    def test_the_verifier_survives_between_the_two_commands(self):
+        import contextlib
+        with contextlib.ExitStack() as stack:
+            self.home(stack)
+            freshair.save_pending("verifier-abc")
+            self.assertEqual(freshair.take_pending(), "verifier-abc")
+
+    def test_a_pending_login_is_single_use(self):
+        import contextlib
+        with contextlib.ExitStack() as stack:
+            self.home(stack)
+            freshair.save_pending("verifier-abc")
+            freshair.take_pending()
+            with self.assertRaises(SystemExit):
+                freshair.take_pending()
+
+    def test_an_expired_attempt_is_refused(self):
+        import contextlib
+        with contextlib.ExitStack() as stack:
+            self.home(stack)
+            freshair.save_pending("verifier-abc")
+            data = json.loads(freshair.pending_path().read_text(encoding="utf-8"))
+            data["at"] = data["at"] - freshair.PENDING_TTL - 60
+            freshair.pending_path().write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                freshair.take_pending()
+
+    def test_a_code_with_no_pending_login_is_refused(self):
+        import contextlib
+        with contextlib.ExitStack() as stack:
+            self.home(stack)
+            with self.assertRaises(SystemExit):
+                freshair.finish_login("some-code", timeout=5)
+
+    def test_the_pending_file_is_not_world_readable(self):
+        import contextlib, stat
+        with contextlib.ExitStack() as stack:
+            self.home(stack)
+            freshair.save_pending("verifier-abc")
+            self.assertEqual(stat.S_IMODE(freshair.pending_path().stat().st_mode), 0o600)
+
+    def test_finishing_by_hand_stores_the_key_and_clears_the_attempt(self):
+        import contextlib, io, http.server, json as _json, threading
+        captured: dict = {}
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                n = int(self.headers.get("Content-Length", 0))
+                captured.update(_json.loads(self.rfile.read(n)))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"key": "sk-or-v1-manual"}')
+
+            def log_message(self, *a):
+                pass
+
+        with contextlib.ExitStack() as stack:
+            self.home(stack)
+            srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            stack.callback(srv.shutdown)
+            stack.enter_context(mock.patch.object(
+                freshair, "OPENROUTER_KEYS_URL",
+                f"http://127.0.0.1:{srv.server_port}/keys"))
+
+            freshair.save_pending("verifier-xyz")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = freshair.finish_login("  code-from-address-bar  ", timeout=10)
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(captured["code"], "code-from-address-bar",
+                             "a pasted code carries whitespace")
+            self.assertEqual(captured["code_verifier"], "verifier-xyz")
+            stored = json.loads(freshair.USER_CONFIG.read_text(encoding="utf-8"))
+            self.assertEqual(stored["api_key"], "sk-or-v1-manual")
+            self.assertNotIn("sk-or-v1-manual", out.getvalue())
+            self.assertFalse(freshair.pending_path().exists())

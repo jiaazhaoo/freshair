@@ -594,6 +594,31 @@ def git(args: list[str], cwd: Path) -> str:
         return ""
 
 
+def branch_base(cwd: Path) -> tuple[str, str]:
+    """The ref this branch forked from, and the commit where it forked.
+
+    Used when the working tree is clean: the work still exists, it is just
+    committed, and a reviewer with no diff at all has nothing to judge.
+    """
+    head = git(["rev-parse", "--abbrev-ref", "HEAD"], cwd).strip()
+    candidates = []
+
+    resolved = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd).strip()
+    if resolved:
+        candidates.append(resolved)
+    candidates += ["origin/main", "origin/master", "main", "master"]
+
+    for name in candidates:
+        if name == head or name.endswith("/" + head):
+            continue  # a branch cannot be diffed against itself
+        if not git(["rev-parse", "--verify", "--quiet", name], cwd).strip():
+            continue
+        base = git(["merge-base", "HEAD", name], cwd).strip()
+        if base:
+            return name, base
+    return "", ""
+
+
 def repo_context(cwd: Path) -> tuple[str, str]:
     """Returns (summary_block, diff_block)."""
     if git(["rev-parse", "--is-inside-work-tree"], cwd).strip() != "true":
@@ -613,13 +638,24 @@ def repo_context(cwd: Path) -> tuple[str, str]:
     summary += "======================\n\n"
 
     diff = git(["diff", "HEAD"], cwd)
+    title = "UNCOMMITTED DIFF (the work under review)"
+
     if not diff.strip():
         diff = git(["diff"], cwd)
+
+    if not diff.strip():
+        # Clean tree. The work is committed, not absent — right after a commit
+        # is exactly when a second opinion is worth asking for.
+        ref, base = branch_base(cwd)
+        if base:
+            diff = git(["diff", base, "HEAD"], cwd)
+            title = f"EVERYTHING THIS BRANCH CHANGED vs {ref} (the work under review)"
+
     if not diff.strip():
         return summary, ""
 
     diff_block = (
-        "\n===== UNCOMMITTED DIFF (the work under review) =====\n"
+        f"\n===== {title} =====\n"
         + clip(diff, DIFF_CAP)
         + "\n===== END DIFF =====\n"
     )

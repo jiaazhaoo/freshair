@@ -86,21 +86,53 @@ Probing backends (a real call each, one token of output):
 
 ## 安装
 
-仓库名是 `what-do-you-think`，工具名是 FreshAir——同一个东西，不是拿错了地址。
+一条命令，不用 clone，不用 git：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jiaazhaoo/what-do-you-think/main/install.sh | bash
+```
+
+装到 `~/.claude/skills/freshair`，所有项目通用。装完在任何 Claude Code 会话里敲 `/freshair`。
+
+只依赖 Python 3.9+ 标准库，没有 `pip install`。
+
+<details>
+<summary>其他装法</summary>
+
+从 clone 装（会用软链，`git pull` 就等于更新）：
 
 ```bash
 git clone https://github.com/jiaazhaoo/what-do-you-think.git
-cd what-do-you-think
-./install.sh          # 装到 ~/.claude/skills/freshair，并列出本机可用的后端
+cd what-do-you-think && ./install.sh
 ```
 
-只在某个项目里用：
+只给某一个项目用：
 
 ```bash
 cp -r skills/freshair /你的项目/.claude/skills/   # 目录名决定斜杠命令，别改
 ```
 
-只依赖 Python 3.9+ 标准库，没有 `pip install`。至少要有一个后端可用——装了 [Codex CLI](https://developers.openai.com/codex/cli) 或 [Gemini CLI](https://github.com/google-gemini/gemini-cli) 并登录过就行，或者配个 [OpenRouter key](https://openrouter.ai/keys)。
+仓库名是 `what-do-you-think`，工具名是 FreshAir——同一个东西，不是拿错了地址。
+</details>
+
+### 配一个"局外人"后端
+
+装完就能用——但如果这台机器上只有 Claude Code，那是**同厂互审**（新的上下文窗口，同一套权重和盲点），脚本每次都会警告你。
+
+想要真正的局外人，装一个你**本来就在付费**的 CLI 就行，用已有账号登录，不用申请 key、不用额外花钱：
+
+```bash
+npm i -g @openai/codex      && codex    # 用 ChatGPT 账号登录
+npm i -g @google/gemini-cli && gemini   # 用 Google 账号登录
+```
+
+或者配 [OpenRouter](https://openrouter.ai/keys)（想指定任意模型时用）：`export OPENROUTER_API_KEY=...`
+
+装完实测一下，每个后端发一个 token 的探针：
+
+```bash
+python3 ~/.claude/skills/freshair/scripts/freshair.py --check
+```
 
 ## 用法
 

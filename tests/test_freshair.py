@@ -456,3 +456,52 @@ class TestGoalHygiene(unittest.TestCase):
         rendered = freshair.extract_goal(turns, 0)
         self.assertEqual(len(kept), rendered.count("--- instruction "))
         self.assertEqual(len(kept), 2)
+
+
+class TestCurrentStateOnACleanTree(unittest.TestCase):
+    """A committed change is still the work under review."""
+
+    def repo(self, stack):
+        import subprocess as sp
+        d = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        run = lambda *a: sp.run(["git", *a], cwd=d, capture_output=True, check=True)
+        run("init", "-q", "-b", "main")
+        run("config", "user.email", "t@t"); run("config", "user.name", "t")
+        (d / "f.txt").write_text("one\n")
+        run("add", "-A"); run("commit", "-qm", "first")
+        return d, run
+
+    def test_a_committed_branch_still_produces_a_diff(self):
+        import contextlib
+        with contextlib.ExitStack() as stack:
+            d, run = self.repo(stack)
+            run("checkout", "-qb", "feature")
+            (d / "f.txt").write_text("one\ntwo\n")
+            run("add", "-A"); run("commit", "-qm", "second")
+
+            _, diff = freshair.repo_context(d)
+            self.assertIn("+two", diff, "a clean tree must not mean an empty review")
+            self.assertIn("THIS BRANCH CHANGED", diff)
+
+    def test_uncommitted_work_still_wins(self):
+        import contextlib
+        with contextlib.ExitStack() as stack:
+            d, run = self.repo(stack)
+            run("checkout", "-qb", "feature")
+            (d / "f.txt").write_text("one\nuncommitted\n")
+
+            _, diff = freshair.repo_context(d)
+            self.assertIn("+uncommitted", diff)
+            self.assertIn("UNCOMMITTED", diff)
+
+    def test_nothing_to_show_is_not_a_crash(self):
+        import contextlib
+        with contextlib.ExitStack() as stack:
+            d, _ = self.repo(stack)
+            summary, diff = freshair.repo_context(d)
+            self.assertIn("branch: main", summary)
+            self.assertEqual(diff, "")
+
+    def test_outside_a_repo_returns_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(freshair.repo_context(Path(d)), ("", ""))

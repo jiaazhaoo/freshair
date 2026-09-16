@@ -99,7 +99,7 @@ you, because a model that shares your weights shares your blind spots:
 |---|---|---|
 | `codex` | the user's existing ChatGPT login | preferred — genuinely outside |
 | `gemini` | the user's existing Google login | preferred — genuinely outside |
-| `openrouter` | `OPENROUTER_API_KEY` | any model, but the user pays per call |
+| `openrouter` | `freshair --login`, or `OPENROUTER_API_KEY` | any model, but the user pays per call |
 | `claude` | the user's existing Anthropic login | last resort, same vendor as you |
 
 When every reviewer is the same vendor as you, the script says so — both on
@@ -160,7 +160,8 @@ If the user wants a different provider or model set, do not hand-edit JSON for
 them — the script writes its own config:
 
 ```bash
-freshair --set-key sk-or-v1-...                          # store an OpenRouter key
+freshair --login                                         # connect OpenRouter in a browser
+freshair --set-key sk-or-v1-...                          # or store a key you already have
 freshair -b openrouter -m openai/gpt-5.1 --save-default  # make it the default
 freshair -b all --save-default council                   # save it as -p council
 freshair --show-config                                   # what is set, and from where

@@ -19,17 +19,23 @@ Stdlib only. No install step.
 from __future__ import annotations
 
 import argparse
+import base64
 import concurrent.futures
+import hashlib
+import http.server
 import json
 import os
 import re
 import shutil
+import secrets
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1244,6 +1250,129 @@ def write_user_config(update: dict) -> Path:
     return USER_CONFIG
 
 
+# --------------------------------------------------------------------------
+# Signing in to OpenRouter without handling the key
+#
+# OAuth PKCE: we hold a random secret, send only its hash to OpenRouter, and
+# the user approves in a browser. The key comes back over a loopback callback
+# and goes straight to disk — it is never shown, pasted, or put in a shell
+# history. https://openrouter.ai/docs/guides/overview/auth/oauth
+# --------------------------------------------------------------------------
+
+OPENROUTER_AUTH_URL = "https://openrouter.ai/auth"
+OPENROUTER_KEYS_URL = "https://openrouter.ai/api/v1/auth/keys"
+
+CALLBACK_PAGE = b"""<!doctype html><meta charset="utf-8">
+<title>FreshAir</title>
+<style>body{font:16px system-ui;margin:4rem auto;max-width:28rem;color:#222}
+code{background:#f4f4f5;padding:.15em .4em;border-radius:4px}</style>
+<h2>Connected.</h2>
+<p>Your OpenRouter key was saved to this machine. You can close this tab and go
+back to the terminal.</p>
+<p>Ask for an outside opinion with <code>/freshair</code>.</p>
+"""
+
+
+def pkce_pair() -> tuple[str, str]:
+    """A verifier we keep, and the S256 challenge we hand out (RFC 7636)."""
+    verifier = base64.urlsafe_b64encode(secrets.token_bytes(48)).decode().rstrip("=")
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    challenge = base64.urlsafe_b64encode(digest).decode().rstrip("=")
+    return verifier, challenge
+
+
+def await_oauth_code(timeout: int) -> tuple[str, "object"]:
+    """Bind a loopback callback and return (auth_url_callback, server)."""
+    received: dict[str, str] = {}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 — http.server's interface
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            received["code"] = (query.get("code") or [""])[0]
+            received["error"] = (query.get("error") or [""])[0]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(CALLBACK_PAGE)
+
+        def log_message(self, *a):  # keep the terminal clean
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    server.timeout = timeout
+    return f"http://localhost:{server.server_port}/callback", (server, received)
+
+
+def exchange_code(code: str, verifier: str, timeout: int) -> str:
+    payload = json.dumps({
+        "code": code,
+        "code_verifier": verifier,
+        "code_challenge_method": "S256",
+    }).encode()
+    req = urllib.request.Request(
+        OPENROUTER_KEYS_URL, data=payload,
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")[:300]
+        hint = ""
+        if e.code == 403:
+            hint = ("\n  A 403 here usually means the browser session was not "
+                    "signed in to OpenRouter. Sign in there first, then retry.")
+        die(f"OpenRouter refused the exchange (HTTP {e.code}): {detail}{hint}")
+    except Exception as e:  # noqa: BLE001
+        die(f"could not reach OpenRouter: {type(e).__name__}: {e}")
+
+    key = str(body.get("key", "")).strip()
+    if not key:
+        die(f"no key in OpenRouter's response: {json.dumps(body)[:300]}")
+    return key
+
+
+def openrouter_login(timeout: int) -> int:
+    verifier, challenge = pkce_pair()
+    callback, (server, received) = await_oauth_code(timeout)
+
+    url = OPENROUTER_AUTH_URL + "?" + urllib.parse.urlencode({
+        "callback_url": callback,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    })
+
+    opened = False
+    try:
+        opened = webbrowser.open(url)
+    except Exception:  # noqa: BLE001 — a headless box has no browser
+        opened = False
+
+    print("Approve FreshAir in your browser." if opened else
+          "Open this in a browser on THIS machine:")
+    print(f"\n  {url}\n")
+    if not opened:
+        print("(If you are on a remote machine, forward the callback port first:\n"
+              f"    ssh -L {urllib.parse.urlparse(callback).port}:"
+              f"localhost:{urllib.parse.urlparse(callback).port} <host>)\n")
+    print(f"Waiting up to {timeout}s for the callback...", flush=True)
+
+    server.handle_request()   # blocks until the browser calls back, or times out
+    server.server_close()
+
+    if received.get("error"):
+        die(f"OpenRouter returned an error: {received['error']}")
+    code = received.get("code", "")
+    if not code:
+        die("no authorization code came back — the browser never reached the "
+            "callback, or it timed out. Nothing was saved.")
+
+    key = exchange_code(code, verifier, timeout)
+    path = write_user_config({"api_key": key})
+    print(f"\nConnected. Key saved to {path} (mode 600); it was never displayed.")
+    print("Try it:  freshair --check")
+    return 0
+
+
 def apply_profile(config: dict, name: str) -> dict:
     profiles = config.get("profiles") or {}
     if name not in profiles:
@@ -1352,6 +1481,9 @@ def main() -> None:
                     help="remember this call's --backend/--model choice. Bare, "
                          "it becomes the default; with a NAME it becomes a "
                          "profile you select with -p NAME.")
+    ap.add_argument("--login", action="store_true",
+                    help="connect OpenRouter in the browser — you approve, the "
+                         "key is stored here, you never see or paste it")
     ap.add_argument("--set-key", metavar="KEY",
                     help="store an OpenRouter key in the user config (mode 600) "
                          "so no environment variable is needed")
@@ -1365,6 +1497,9 @@ def main() -> None:
                     help="print exactly what would be sent and how, call nothing")
     ap.add_argument("--save", metavar="PATH", help="also write the review to this file")
     args = ap.parse_args()
+
+    if args.login:
+        sys.exit(openrouter_login(args.timeout))
 
     if args.set_key:
         path = write_user_config({"api_key": args.set_key.strip()})

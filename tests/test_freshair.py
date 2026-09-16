@@ -878,3 +878,138 @@ class TestConfigLayer(unittest.TestCase):
             self.home(stack)
             path = freshair.write_user_config({"api_key": "sk-or-v1-x"})
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+
+class TestOpenRouterLogin(unittest.TestCase):
+    """The browser flow, with a stand-in for OpenRouter.
+
+    Everything here is exercised for real except the remote host: PKCE
+    derivation, the loopback callback, the code exchange, and where the key
+    lands. The key must never be printed.
+    """
+
+    def fake_openrouter(self, stack, response: dict, status: int = 200):
+        import http.server, json as _json, threading
+        captured: dict = {}
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                n = int(self.headers.get("Content-Length", 0))
+                captured.update(_json.loads(self.rfile.read(n)))
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(_json.dumps(response).encode())
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        stack.callback(srv.shutdown)
+        stack.enter_context(mock.patch.object(
+            freshair, "OPENROUTER_KEYS_URL",
+            f"http://127.0.0.1:{srv.server_port}/api/v1/auth/keys"))
+        return captured
+
+    def fake_browser(self, stack, code="auth-code-123"):
+        """Stands in for the human approving in a browser."""
+        import threading, urllib.parse, urllib.request
+
+        def opener(url):
+            params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+            cb = params["callback_url"][0]
+            def hit():
+                try:
+                    urllib.request.urlopen(f"{cb}?code={code}", timeout=5).read()
+                except Exception:
+                    pass
+            threading.Thread(target=hit, daemon=True).start()
+            return True
+
+        stack.enter_context(mock.patch.object(freshair.webbrowser, "open", opener))
+
+    def home(self, stack):
+        d = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        stack.enter_context(mock.patch.object(
+            freshair, "USER_CONFIG", d / ".config" / "freshair" / "config.json"))
+        return d
+
+    def test_the_key_is_stored_and_never_printed(self):
+        import contextlib, io
+        with contextlib.ExitStack() as stack:
+            self.home(stack)
+            self.fake_openrouter(stack, {"key": "sk-or-v1-secret-value"})
+            self.fake_browser(stack)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = freshair.openrouter_login(timeout=10)
+
+            self.assertEqual(rc, 0)
+            stored = json.loads(freshair.USER_CONFIG.read_text(encoding="utf-8"))
+            self.assertEqual(stored["api_key"], "sk-or-v1-secret-value")
+            self.assertNotIn("sk-or-v1-secret-value", out.getvalue(),
+                             "the key must never reach the terminal")
+
+    def test_the_exchange_proves_possession_of_the_verifier(self):
+        import contextlib, io, base64, hashlib, urllib.parse
+        seen_challenge = {}
+        with contextlib.ExitStack() as stack:
+            self.home(stack)
+            captured = self.fake_openrouter(stack, {"key": "sk-or-v1-x"})
+
+            real_pair = freshair.pkce_pair()
+            stack.enter_context(mock.patch.object(
+                freshair, "pkce_pair", lambda: real_pair))
+
+            import threading, urllib.request
+            def opener(url):
+                q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+                seen_challenge["value"] = q["code_challenge"][0]
+                seen_challenge["method"] = q["code_challenge_method"][0]
+                cb = q["callback_url"][0]
+                threading.Thread(
+                    target=lambda: urllib.request.urlopen(f"{cb}?code=abc", timeout=5).read(),
+                    daemon=True).start()
+                return True
+            stack.enter_context(mock.patch.object(freshair.webbrowser, "open", opener))
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                freshair.openrouter_login(timeout=10)
+
+        self.assertEqual(seen_challenge["method"], "S256")
+        # only the hash goes out first; the verifier only on the exchange
+        verifier = captured["code_verifier"]
+        expected = base64.urlsafe_b64encode(
+            hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+        self.assertEqual(expected, seen_challenge["value"])
+        self.assertEqual(captured["code"], "abc")
+        self.assertEqual(captured["code_challenge_method"], "S256")
+
+    def test_a_refusal_saves_nothing(self):
+        import contextlib, io
+        with contextlib.ExitStack() as stack:
+            self.home(stack)
+            self.fake_openrouter(stack, {"error": "nope"}, status=403)
+            self.fake_browser(stack)
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+                freshair.openrouter_login(timeout=10)
+            self.assertFalse(freshair.USER_CONFIG.exists())
+
+    def test_a_response_with_no_key_is_an_error_not_a_silent_success(self):
+        import contextlib, io
+        with contextlib.ExitStack() as stack:
+            self.home(stack)
+            self.fake_openrouter(stack, {"ok": True})
+            self.fake_browser(stack)
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+                freshair.openrouter_login(timeout=10)
+            self.assertFalse(freshair.USER_CONFIG.exists())
+
+    def test_the_callback_binds_to_loopback_only(self):
+        _, (server, _) = freshair.await_oauth_code(timeout=1)
+        try:
+            self.assertEqual(server.server_address[0], "127.0.0.1")
+        finally:
+            server.server_close()

@@ -177,15 +177,23 @@ npm i -g @openai/codex      && codex    # sign in with ChatGPT
 npm i -g @google/gemini-cli && gemini   # sign in with Google
 ```
 
-Or use OpenRouter to name an arbitrary model — one command, no environment
-variable to manage:
+Or use OpenRouter to name an arbitrary model. Connect it in a browser — you
+approve, and the key goes straight to disk without passing through your hands:
 
 ```bash
-freshair --set-key sk-or-v1-...     # get one at https://openrouter.ai/keys
+freshair --login
 ```
 
-That writes it to `~/.config/freshair/config.json` with mode 600. A key in the
-*repo* config is refused and says so, because that file gets committed.
+It opens OpenRouter, waits on a loopback callback, and stores the key in
+`~/.config/freshair/config.json` with mode 600. Nothing to copy, nothing pasted
+into a shell, no key in your history — it is never displayed at all. The flow is
+[OAuth PKCE](https://openrouter.ai/docs/guides/overview/auth/oauth): only a hash
+of a one-time secret leaves this machine up front, and the secret itself only on
+the exchange, so an intercepted callback is not enough to mint a key.
+
+If you already have a key in hand, `freshair --set-key sk-or-v1-...` skips the
+browser. Either way a key in the *repo* config is refused and says so, because
+that file gets committed.
 
 Then confirm what actually works on this machine — one real call per backend,
 one token of output each:
@@ -286,7 +294,8 @@ python3 $F --dry-run                # show exactly what would be sent, call noth
 | `-b, --backend` | `auto` (default) / `all` / `codex` / `gemini` / `claude` / `openrouter`. Repeat it to ask several independent reviewers at once |
 | `-p, --profile` | Use a saved profile |
 | `--save-default [NAME]` | Remember this call's `-b`/`-m` choice, as the default or as a named profile |
-| `--set-key KEY` | Store an OpenRouter key in the user config (mode 600) |
+| `--login` | Connect OpenRouter in the browser; the key is stored, never shown |
+| `--set-key KEY` | Store a key you already have, without the browser |
 | `--show-config` | Print every setting, where it came from, and what is reachable |
 | `--from` | `claude` or `codex` — which host's session to read. Defaults to the most recent |
 | `-m, --model` | Model id; repeat or comma-separate to run several in parallel. With more than one backend these apply to `openrouter` only, since model ids are not portable between vendors |
@@ -357,7 +366,7 @@ out.
 python3 -m unittest discover -s tests -v
 ```
 
-102 tests covering transcript parsing for both hosts (Claude Code, and Codex in
+107 tests covering transcript parsing for both hosts (Claude Code, and Codex in
 both its record generations) (role labelling, sidechain filtering,
 system-reminder stripping, tool-output capping), goal extraction (human
 instructions only, boilerplate and harness notices rejected, retyped

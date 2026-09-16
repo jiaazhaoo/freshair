@@ -135,11 +135,21 @@ One command. No clone, no git:
 curl -fsSL https://raw.githubusercontent.com/jiaazhaoo/what-do-you-think/main/install.sh | bash
 ```
 
-It installs to `~/.claude/skills/freshair`, and also to
-`$CODEX_HOME/skills/freshair` when Codex is present. Then:
+It installs three things:
 
-- **Claude Code**: `/freshair`
-- **Codex**: `$freshair` (restart Codex so it picks the skill up)
+- the skill in `~/.claude/skills/freshair` — invoke it with **`/freshair`** in
+  Claude Code
+- the same skill in `$CODEX_HOME/skills/freshair` when Codex is present —
+  **`$freshair`** there, after restarting Codex
+- a **`freshair`** launcher in `~/.local/bin`, for the setup commands below
+
+If `~/.local/bin` is not on your `PATH` the installer says so and prints the
+line to add. You can skip the launcher entirely — every `freshair ...` command
+in this README also works as:
+
+```bash
+python3 ~/.claude/skills/freshair/scripts/freshair.py ...
+```
 
 Python 3.9+ standard library only. No `pip install`.
 

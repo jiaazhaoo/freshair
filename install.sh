@@ -66,6 +66,42 @@ fi
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null \
   || echo "! python3 3.9+ not found on PATH — FreshAir needs it to run"
 
+# A launcher on PATH, so setup commands are `freshair --login` rather than a
+# path to a script the user has to remember.
+BIN_DIR="${FRESHAIR_BIN_DIR:-$HOME/.local/bin}"
+mkdir -p "$BIN_DIR"
+cat > "$BIN_DIR/freshair" <<'LAUNCHER'
+#!/usr/bin/env bash
+# FreshAir launcher. Installed by install.sh; the skill itself lives under
+# ~/.claude/skills/freshair (and ~/.codex/skills/freshair when Codex is present).
+for candidate in \
+  "${CLAUDE_SKILL_DIR:-}/scripts/freshair.py" \
+  "$HOME/.claude/skills/freshair/scripts/freshair.py" \
+  "${CODEX_HOME:-$HOME/.codex}/skills/freshair/scripts/freshair.py"
+do
+  if [ -f "$candidate" ]; then exec python3 "$candidate" "$@"; fi
+done
+echo "freshair: cannot find freshair.py - reinstall with:" >&2
+echo "  curl -fsSL https://raw.githubusercontent.com/jiaazhaoo/what-do-you-think/main/install.sh | bash" >&2
+exit 1
+LAUNCHER
+chmod +x "$BIN_DIR/freshair"
+echo "✓ Installed launcher  $BIN_DIR/freshair"
+
+case ":$PATH:" in
+  *":$BIN_DIR:"*) ;;
+  *)
+    rc="$HOME/.bashrc"
+    case "${SHELL:-}" in *zsh) rc="$HOME/.zshrc" ;; esac
+    echo
+    echo "! $BIN_DIR is not on your PATH, so \`freshair\` will not resolve yet."
+    echo "  Add it:"
+    echo "      echo 'export PATH=\"$BIN_DIR:\$PATH\"' >> $rc && source $rc"
+    echo "  Or skip the launcher entirely and call the script directly:"
+    echo "      python3 $HOME/.claude/skills/freshair/scripts/freshair.py --login"
+    ;;
+esac
+
 echo
 echo "Claude Code:  /freshair"
 if [ -d "${CODEX_HOME:-$HOME/.codex}" ]; then

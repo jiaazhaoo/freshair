@@ -159,6 +159,11 @@ the user's files for an API key.
 If the user wants a different provider or model set, do not hand-edit JSON for
 them — the script writes its own config:
 
+`freshair` here is the launcher `install.sh` puts in `~/.local/bin`. If the user
+reports `command not found`, it is not on their PATH — give them the direct
+form instead of debugging their shell:
+`python3 "${CLAUDE_SKILL_DIR}/scripts/freshair.py" --login`
+
 ```bash
 freshair --login                                         # connect OpenRouter in a browser
 freshair --set-key sk-or-v1-...                          # or store a key you already have

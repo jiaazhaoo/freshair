@@ -1,6 +1,6 @@
 ---
 name: FreshAir
-description: Get an outside opinion on the current work from a model that has not seen this conversation. By default it sends only the original goal and the current state, so the reviewer cannot be anchored by the reasoning that got you here. Routes through a locally installed CLI the user is already signed in to (Codex, Gemini, Claude) or OpenRouter. Use when the conversation has gone long and circular, when the same fix keeps failing, before committing to a big refactor, or whenever the user asks for a second opinion, outside eyes, a sanity check, or says things like "问问别的模型", "换个思路", "我们是不是跑偏了", "freshair", "fresh air", "新鲜空气", "越聊越笨", "钻牛角尖". Also good on a long task before committing to a direction. Not for ordinary code review of a diff.
+description: Get an outside opinion on the current work from a model that has not seen this conversation. By default it sends only the original goal and the current state, so the reviewer cannot be anchored by the reasoning that got you here. Routes through a locally installed CLI the user is already signed in to (Codex, Gemini, Claude) or OpenRouter. Use when the conversation has gone long and circular, when the same fix keeps failing, before committing to a big refactor, or whenever the user asks for a second opinion, outside eyes, a sanity check, or says things like "what do you think", "am I overcomplicating this", "are we off track", "freshair", "fresh air", "sanity check", "outside eyes". Also good on a long task before committing to a direction. Not for ordinary code review of a diff.
 argument-hint: [what to look at]
 allowed-tools: Bash(python3 *)
 ---
@@ -50,7 +50,7 @@ Add a focus when the user pointed at something specific — it goes in
 `$ARGUMENTS`:
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/freshair.py" "这个缓存层到底值不值得"
+python3 "${CLAUDE_SKILL_DIR}/scripts/freshair.py" "is the caching layer worth it"
 ```
 
 ### Backends
@@ -84,7 +84,7 @@ signal than it looks, and they should know which one they got.
 | `--budget N` | Max transcript characters (default 140000). Lower it if a backend rejects the size. |
 | `--no-diff` | Skip the git diff attachment. |
 | `--save PATH` | Also write the review to a file. |
-| `--lang` | Force a language. By default it answers in whatever language the human used. |
+| `--lang` | Language for the review. Defaults to English. |
 
 ## Reporting back
 

@@ -1,191 +1,202 @@
 # FreshAir
 
-> 长任务里的 AI 会越来越狭隘。不是模型退化，是它开始在自己的结论上盖楼——每一层都建立在上一层没人质疑过的假设上，而它在里面看不见这件事。
+> On a long task an AI gets narrower, not smarter. It builds on its own earlier
+> conclusions, stops generating options, and cannot see this from the inside.
 >
-> `/freshair` 开一扇窗：把**最初的目标**和**现在的成果**交给一个从没参与过这段对话的 AI，中间那一百轮自我论证全部丢掉，让它在全新的上下文窗口里从零推一遍。
+> `/freshair` opens a window: it hands the **original goal** and the **current
+> state** to a model that never sat in this conversation, throws away the
+> hundred turns of self-justification in between, and lets it reason from
+> scratch.
 
 ```
-你 ──── 聊了 60 轮 ────> Claude （已经陷进去了）
-                           │
-                           │  /freshair
-                           ▼
-                    session.jsonl
-                           │
-              ┌────────────┴────────────┐
-         最初的目标                 当前的成果
-        （人类说的话）              （git diff）
-              └────────────┬────────────┘
-                           │      ← 中间 140 轮 agent 自述，扔掉
-          ┌────────────────┼────────────────┐
-          ▼                ▼                ▼
-    codex exec        gemini -p        OpenRouter
-   （你的 ChatGPT   （你的 Google      （按量付费）
-     账号，已登录）    账号，已登录）
-          └────────────────┼────────────────┘
-                           ▼
-              「这东西没在解决你说的那个问题」
+you ──── 60 turns in ────> Claude (already anchored)
+                              │
+                              │  /freshair
+                              ▼
+                       session.jsonl
+                              │
+                 ┌────────────┴────────────┐
+             the goal                 what exists
+        (what you actually said)       (the diff)
+                 └────────────┬────────────┘
+                              │   ← 140 turns of agent reasoning: dropped
+          ┌───────────────────┼───────────────────┐
+          ▼                   ▼                   ▼
+    codex exec            gemini -p           OpenRouter
+  (your ChatGPT         (your Google          (pay per call)
+   login, already        login, already
+   signed in)            signed in)
+          └───────────────────┼───────────────────┘
+                              ▼
+            "this isn't solving the problem you stated"
 ```
 
-## 为什么要扔掉中间过程
+## Why throw the middle away
 
-直觉上应该把完整对话发过去——信息越多判断越准。**恰恰相反。**
+The intuition is to send the whole conversation — more context, better judgment.
+**It is the opposite.**
 
-把 100 轮对话喂给外部模型，它会先读到那套推理，**然后才形成判断**。于是它被同一条思路锚定，点头同意，你花的钱买了一个回声。
+Feed a reviewer 100 turns and it reads the reasoning *before* it forms a view.
+It gets anchored on the same path, nods along, and you have paid for an echo.
 
-只给「目标 + 现状」，它没有路径可循，只能自己从目标推一遍。分歧就是在这里产生的——而分歧才是你要的东西。
+Give it only the goal and the artifact and it has no path to follow. It has to
+work forward from the goal on its own. That is where disagreement comes from,
+and disagreement is the entire product.
 
-而且判断跑偏本来就只需要两个端点：当初要什么，现在有什么。中间过程是用来定位"哪一轮歪的"，那是另一个问题，`--mode full` 专门干这个。
+Detecting drift never needed the middle anyway — only the two endpoints: what
+was asked, and what exists. Locating *which turn* went wrong is a different
+question, and `--mode full` is there for it.
 
-## 为什么不是又一个 "second opinion" 工具
+## How this differs from the other second-opinion tools
 
-市面上的同类工具都少了关键一环：
-
-| 工具 | 送出去的是什么 |
+| Tool | What it sends out |
 |---|---|
-| [consult-llm](https://github.com/raine/consult-llm) | 你手动挑的文件 |
-| [fresheyes](https://github.com/danshapiro/fresheyes) | git diff |
-| [second-opinion](https://github.com/dshills/second-opinion) / [ai-council-mcp](https://github.com/0xakuti/ai-council-mcp) 等 MCP | **Claude 自己写的一段转述** |
-| **FreshAir** | **人类原话说的目标 + 当前 diff，agent 的自述一句不发** |
+| [consult-llm](https://github.com/raine/consult-llm) | files you pick by hand |
+| [fresheyes](https://github.com/danshapiro/fresheyes) | a git diff |
+| [second-opinion](https://github.com/dshills/second-opinion) / [ai-council-mcp](https://github.com/0xakuti/ai-council-mcp) and other MCP servers | **a summary the stuck agent wrote itself** |
+| **FreshAir** | **your own words as the goal, plus the diff — none of the agent's narration** |
 
-最后一类的问题最致命：让已经跑偏的那个人去概括"我们在干嘛"，它会自动滤掉自己认为不重要的东西——而那正好就是它跑偏的地方。转述这个动作本身就把要检查的东西弄丢了。
+That last row is the important one. Asking the agent that already drifted to
+summarize "what we're doing" means it filters out whatever it considers
+unimportant — which is precisely where it drifted. The act of summarizing
+destroys the thing you wanted examined.
 
-所以这里的设计是**绕开 Claude**：脚本自己从磁盘上读 `~/.claude/projects/<项目>/<会话>.jsonl`，自己挑出人类说过的话当目标。Claude 只负责执行命令和转达结果，从头到尾没机会"概括"任何东西。
+So the design routes around the agent: the script reads
+`~/.claude/projects/<project>/<session>.jsonl` off disk itself and picks out
+what the human said. The agent never gets a chance to narrate.
 
-跟 fresheyes 那种只发 diff 的也不一样：diff 只说明"改成了什么"，说不清"当初到底要什么"。目标必须是人类的原话，不能是从代码反推出来的。
+This is also why a diff alone is not enough: a diff shows what changed, not what
+was asked for. The goal has to be the human's own words, not something inferred
+backwards from the code.
 
-## 不用申请 key，用你已经登录的账号
+## No API key — it uses accounts you are already signed in to
 
-优先走**本机已装好、已登录**的厂商 CLI。请求从你的机器直接发给你本来就在付费的厂商，不经过任何第三方，也不用复制粘贴任何 key。
+FreshAir prefers a vendor CLI already installed and authenticated on your
+machine. The request goes straight from your machine to a vendor you already pay,
+with no key to copy and no third party in the path.
 
-| 后端 | 认证方式 | 说明 |
+| Backend | Auth | Notes |
 |---|---|---|
-| `codex` | 你的 ChatGPT 登录（Codex CLI） | 首选——真正的局外人 |
-| `gemini` | 你的 Google 登录（Gemini CLI） | 首选——真正的局外人 |
-| `openrouter` | `OPENROUTER_API_KEY` | 想指定任意模型时用，按量计费 |
-| `claude` | 你的 Anthropic 登录（Claude Code CLI） | 兜底。**同厂同权重，盲点也是同一套** |
+| `codex` | your ChatGPT login (Codex CLI) | preferred — a genuine outsider |
+| `gemini` | your Google login (Gemini CLI) | preferred — a genuine outsider |
+| `openrouter` | `OPENROUTER_API_KEY` | for picking an arbitrary model; billed per call |
+| `claude` | your Anthropic login (Claude Code CLI) | last resort. **Same vendor, same weights, same blind spots** |
 
-`--backend auto`（默认）**优先挑跟你不同厂商的**。真落到 `claude` 时会在 stderr 打一条警告说明——同厂互审是这个工具最弱的形态，你有权知道自己拿到的是哪一种。
+`--backend auto` (the default) **prefers a vendor different from the one you are
+talking to**. When it does fall back to `claude` it says so on stderr, because a
+same-vendor review is a much weaker signal than it looks.
 
-CLI 后端一律以只读方式调起（`codex exec --sandbox read-only`、`claude -p --disallowed-tools Edit Write NotebookEdit Bash`），审阅者能翻代码核实，但改不了任何东西。
+Reviewers are always invoked read-only (`codex exec --sandbox read-only`,
+`claude -p --disallowed-tools Edit Write NotebookEdit Bash`) and run from a
+scratch directory, with the repo handed back as a readable path. They can open a
+file to check a claim; they cannot change anything, and they cannot write into
+the session log they are reviewing.
 
-各家 CLI 的 flag 会变。所以别信文档，直接实测——每个后端发一个只回一个 token 的探针：
+## Install
 
-```bash
-python3 ~/.claude/skills/freshair/scripts/freshair.py --check
-```
-
-```
-Probing backends (a real call each, one token of output):
-  ✓ codex       codex exec --sandbox read-only --ask-for-approval never -   (3.1s)
-  – gemini      not installed (gemini not on PATH)
-  ✓ claude      claude -p --disallowed-tools Edit Write NotebookEdit Bash   (4.3s)
-  ✗ openrouter — OPENROUTER_API_KEY is not set
-```
-
-失败时会打出完整命令行，照着改 `.freshair.json` 里的 `backends` 就行，不用动代码。
-
-## 安装
-
-一条命令，不用 clone，不用 git：
+One command. No clone, no git:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jiaazhaoo/what-do-you-think/main/install.sh | bash
 ```
 
-装到 `~/.claude/skills/freshair`，所有项目通用。装完在任何 Claude Code 会话里敲 `/freshair`。
+It installs to `~/.claude/skills/freshair` and works in every project. Then type
+`/freshair` in any Claude Code session.
 
-只依赖 Python 3.9+ 标准库，没有 `pip install`。
+Python 3.9+ standard library only. No `pip install`.
 
 <details>
-<summary>其他装法</summary>
+<summary>Other ways to install</summary>
 
-从 clone 装（会用软链，`git pull` 就等于更新）：
+From a clone (symlinks it, so `git pull` is the update):
 
 ```bash
 git clone https://github.com/jiaazhaoo/what-do-you-think.git
 cd what-do-you-think && ./install.sh
 ```
 
-只给某一个项目用：
+For a single project:
 
 ```bash
-cp -r skills/freshair /你的项目/.claude/skills/   # 目录名决定斜杠命令，别改
+cp -r skills/freshair /your/project/.claude/skills/   # the directory name is the slash command; don't rename it
 ```
 
-仓库名是 `what-do-you-think`，工具名是 FreshAir——同一个东西，不是拿错了地址。
+The repository is named `what-do-you-think` and the tool is named FreshAir. Same
+thing, not a wrong link.
 </details>
 
-### 配一个"局外人"后端
+### Give it a real outsider
 
-装完就能用——但如果这台机器上只有 Claude Code，那是**同厂互审**（新的上下文窗口，同一套权重和盲点），脚本每次都会警告你。
+It works immediately after install — but if Claude Code is the only CLI on the
+machine, that is Claude reviewing Claude: a fresh context window, but the same
+weights and the same blind spots. The script warns you every time.
 
-想要真正的局外人，装一个你**本来就在付费**的 CLI 就行，用已有账号登录，不用申请 key、不用额外花钱：
+For a genuine outsider, install a CLI you already pay for. It reuses the existing
+login, so there is no key to request and nothing extra to buy:
 
 ```bash
-npm i -g @openai/codex      && codex    # 用 ChatGPT 账号登录
-npm i -g @google/gemini-cli && gemini   # 用 Google 账号登录
+npm i -g @openai/codex      && codex    # sign in with ChatGPT
+npm i -g @google/gemini-cli && gemini   # sign in with Google
 ```
 
-或者配 [OpenRouter](https://openrouter.ai/keys)（想指定任意模型时用）：`export OPENROUTER_API_KEY=...`
+Or configure [OpenRouter](https://openrouter.ai/keys) if you want to name an
+arbitrary model: `export OPENROUTER_API_KEY=...`
 
-装完实测一下，每个后端发一个 token 的探针：
+Then confirm what actually works on this machine — one real call per backend,
+one token of output each:
 
 ```bash
 python3 ~/.claude/skills/freshair/scripts/freshair.py --check
 ```
 
-## 用法
+## Usage
 
-在 Claude Code 里敲斜杠：
+In Claude Code:
 
 ```
 /freshair
-/freshair 这个缓存层到底值不值得
+/freshair is the caching layer worth it
 ```
 
-或者直接说人话，Claude 会自己调起来：
+Or just say it, and Claude will reach for it: "are we off track", "am I
+overcomplicating this", "get a second opinion on this".
 
-```
-问问别的模型我们这么搞对不对
-换个脑子看看这段
-我们是不是跑偏了
-```
-
-也可以脱离 Claude Code 直接跑：
+You can also run it outside Claude Code:
 
 ```bash
-W=~/.claude/skills/freshair/scripts/freshair.py
+F=~/.claude/skills/freshair/scripts/freshair.py
 
-python3 $W                              # 自动挑后端，全面审视
-python3 $W "这个缓存层值不值得"           # 指定关注点
-python3 $W -b codex                     # 强制走 ChatGPT
-python3 $W -b openrouter -m x-ai/grok-4 -m anthropic/claude-opus-4.6   # 多模型并行
-python3 $W --dry-run                    # 只看要发出去什么，不发请求
+python3 $F                          # pick a backend automatically, review everything
+python3 $F "is the caching worth it"  # focus on one question
+python3 $F -b codex                 # force a backend
+python3 $F -b openrouter -m x-ai/grok-4 -m anthropic/claude-opus-4.6   # several models in parallel
+python3 $F --dry-run                # show exactly what would be sent, call nothing
 ```
 
-### 常用参数
+### Options
 
-| 参数 | 说明 |
+| Flag | What it does |
 |---|---|
-| `--mode` | `fresh`（默认，只发目标+现状）/ `full`（发完整对话，用于定位"哪一轮歪的"） |
-| `--goal-turns N` | 只取前 N 条人类指令当目标 |
-| `--no-claim` | 连 agent 自己的进度总结也不发，只留目标和 diff |
-| `-b, --backend` | `auto`（默认）/ `codex` / `gemini` / `claude` / `openrouter` |
-| `-m, --model` | 模型 id，可重复或逗号分隔，多个并行。CLI 后端不填就用它自己的默认模型 |
-| `--dry-run` | 打印完整 payload **和将要执行的命令**，不发请求 |
-| `--thinking` | 带上 Claude 的思考过程（payload 大约翻倍） |
-| `--budget N` | 最多发送多少字符，默认 140000 |
-| `--head-turns N` | 开头永远保留的轮数，默认 6——保住"最初要求"才看得出跑偏 |
-| `--no-diff` | 不附带 git diff |
-| `--save PATH` | 顺便存一份到文件 |
-| `--lang` | 指定回复语言，默认跟着对话里人类用的语言走 |
-| `--check` | 逐个实测后端是否真的能用，打印实际执行的命令 |
-| `--session-id` | 手动指定会话 id（自动识别选错时用） |
-| `--transcript PATH` | 审别的会话记录，不是当前这个 |
+| `--mode` | `fresh` (default: goal + current state) or `full` (whole transcript, for "which turn went wrong") |
+| `--goal-turns N` | Use only the first N human instructions as the goal |
+| `--no-claim` | Withhold the agent's own progress summary too, leaving only the goal and the diff |
+| `-b, --backend` | `auto` (default) / `codex` / `gemini` / `claude` / `openrouter` |
+| `-m, --model` | Model id; repeat or comma-separate to run several in parallel |
+| `--check` | Probe every backend with a one-token call and print the exact command used |
+| `--dry-run` | Print the full payload and the command, send nothing |
+| `--thinking` | Include the agent's thinking blocks (roughly doubles the payload) |
+| `--budget N` | Max transcript characters, default 140000 |
+| `--no-diff` | Don't attach the git diff |
+| `--save PATH` | Also write the review to a file |
+| `--lang` | Language for the review. Defaults to English |
+| `--session-id` | Name the session explicitly if autodetection picks wrong |
+| `--transcript PATH` | Review a different session's log |
 
-### 配置
+### Configuration
 
-项目根目录放 `.freshair.json`，或 `~/.config/freshair/config.json`。完整示例见 [`.freshair.example.json`](.freshair.example.json)：
+Drop a `.freshair.json` in the repository root, or at
+`~/.config/freshair/config.json`. Full example in
+[`.freshair.example.json`](.freshair.example.json):
 
 ```json
 {
@@ -197,38 +208,55 @@ python3 $W --dry-run                    # 只看要发出去什么，不发请�
 }
 ```
 
-每个 CLI 后端的命令行都可以在这里覆盖——上游改了 flag，改配置就行，不用动代码。
+Every CLI backend's command line is overridable there — when an upstream flag
+changes, it is a config edit, not a patch.
 
-## 它到底问了什么
+## What it actually asks
 
-发出去的 prompt 不是"帮我 review 一下"——那种问法只会换来一堆礼貌的废话。外部模型被要求回答六件具体的事：
+The prompt is not "please review this". That phrasing buys nothing but polite
+noise. The outside model is required to answer six specific things:
 
-- **判断** — KEEP GOING / ADJUST COURSE / STOP AND RETHINK，一句话说清
-- **跑偏了吗** — 引用最初那条需求，对比现在在造的东西，指出是哪一轮开始歪的
-- **没人质疑过的假设** — 对话里被当成既定事实、但其实不是的东西
-- **具体问题** — 按破坏力排序，必须指到具体位置
-- **更简单的做法** — 包括"这一整块可以删掉"这种答案
-- **如果我从零开始** — 只知道最初目标的话，它会怎么做
+- **Verdict** — KEEP GOING / ADJUST COURSE / STOP AND RETHINK, in one line
+- **Does this solve the stated problem** — hold what exists against the goal; what is missing, and what is here that was never asked for
+- **How you would have approached it** — knowing only the goal, what would you reach for?
+- **Unexamined assumptions** — what the design takes for granted, and what it costs if wrong
+- **Concrete problems** — cited to file and line, ordered by damage
+- **What can be deleted** — including "most of this"
 
-同时明确禁止：开场恭维、"注意边界情况"这类空话、把 Claude 的说法当证据。
+And it is explicitly forbidden to open with praise, to write filler like
+"consider edge cases", or to treat the agent's framing as evidence.
 
-超预算时不是简单砍掉旧的：开头几轮（最初的需求）和最近几轮（当前的成果）都完整保留，中间部分省略并标注。丢了最初的需求，就没法判断跑偏。
+When the payload is over budget, the oldest turns are not simply dropped: the
+opening instructions and the most recent work are both kept intact and the middle
+is elided with a marker. Lose the original ask and you cannot judge drift.
 
-## 隐私
+## Privacy
 
-对话记录（含工具输出、文件内容、出现过的代码）会发给被问的那个模型。走 CLI 后端时从你的机器直达厂商；走 `openrouter` 时还会多经过 OpenRouter 一道。
+The transcript — including tool output, file contents, and code that appeared in
+the conversation — goes to whichever model is asked. On a CLI backend it goes
+straight from your machine to a vendor you already have an account with; on
+`openrouter` it also passes through OpenRouter.
 
-脚本在发送前会清洗常见的凭据格式（OpenAI / Anthropic / OpenRouter key、GitHub token、AWS access key、Google API key、Slack token、JWT、私钥块）。**这是安全网，不是保证。** 在敏感仓库里先跑 `--dry-run` 看一眼再说。
+Credential-shaped strings are scrubbed before sending (OpenAI / Anthropic /
+OpenRouter keys, GitHub tokens, AWS access keys, Google API keys, Slack tokens,
+JWTs, private key blocks). **That is a safety net, not a guarantee.** In a
+repository with sensitive material, run `--dry-run` first and read what is going
+out.
 
-## 开发
+## Development
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-36 个测试，覆盖 transcript 解析（角色标注、sidechain 过滤、system-reminder 剥离、工具输出截断）、预算裁剪（头尾保留、中段省略、极端情况）、凭据脱敏（正例与误伤）、后端解析（参数顺序、只读 flag、配置覆盖、优先级）。纯 stdlib，不联网、不起子进程。
+61 tests covering transcript parsing (role labelling, sidechain filtering,
+system-reminder stripping, tool-output capping), goal extraction (human
+instructions only, boilerplate and harness notices rejected, retyped
+instructions deduplicated), budget fitting, credential redaction, self-
+contamination defences, and backend resolution. Standard library only — no
+network, no subprocesses.
 
-CI 在 Python 3.9 / 3.11 / 3.13 上跑。
+CI runs on Python 3.9, 3.11 and 3.13.
 
 ## License
 

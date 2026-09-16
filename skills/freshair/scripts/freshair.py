@@ -179,28 +179,28 @@ USER_TEMPLATE_FRESH = """\
 {repo_block}{diff_block}{claim_block}
 Answer in this structure, in {lang}:
 
-## 判断 / Verdict
+## Verdict
 One line, one of: KEEP GOING / ADJUST COURSE / STOP AND RETHINK — plus one \
 sentence of why.
 
-## 这东西在解决那个问题吗 / Does this solve the stated problem
+## Does this solve the stated problem
 Hold what exists against the goal. What the goal asked for that is missing, and \
 what is here that the goal never asked for.
 
-## 你会怎么做 / How you would have approached it
+## How you would have approached it
 Knowing only the goal, what would you reach for? If it differs from what is \
 here, say concretely what the difference buys — and if it does not differ, say \
 that, because it is real information.
 
-## 没人质疑过的假设 / Unexamined assumptions
+## Unexamined assumptions
 What does this design take for granted? For each: why it might be wrong, and \
 what it costs if it is.
 
-## 具体问题 / Concrete problems
+## Concrete problems
 Bugs, gaps, broken logic, missing cases. Cite file and line. Ordered by how \
 much damage they do.
 
-## 能删掉什么 / What can be deleted
+## What can be deleted
 Anything here not earning its place? Say so even if it is most of the work.
 """
 
@@ -215,29 +215,29 @@ Read the session transcript below, then answer in the structure given at the end
 {diff_block}
 Answer in this structure, in {lang}:
 
-## 判断 / Verdict
+## Verdict
 One line, one of: KEEP GOING / ADJUST COURSE / STOP AND RETHINK — plus one \
 sentence of why.
 
-## 跑偏了吗 / Drift
+## Drift
 What did the human ask for in their earliest messages, and is that still what is \
 being built? Quote the original ask. If it drifted, name the turn where it \
 drifted.
 
-## 没人质疑过的假设 / Unexamined assumptions
+## Unexamined assumptions
 Things the transcript treats as settled that are not. For each: why it might be \
 wrong, and what it would cost if it is.
 
-## 具体问题 / Concrete problems
+## Concrete problems
 Bugs, gaps, broken logic, missing cases. Cite where. Ordered by how much damage \
 they do.
 
-## 更简单的做法 / The simpler path
+## The simpler path
 Is there a materially simpler approach that was never considered? Is there a \
 chunk of this that could just be deleted? Say so even if it means throwing away \
 most of the work.
 
-## 如果我从零开始 / If I started fresh
+## If I started fresh
 Two or three sentences: knowing only the original goal, how would you have \
 approached this? If it is the same as what they did, say that — it is useful \
 information.
@@ -950,8 +950,9 @@ def main() -> None:
                          "where things stand, leaving only the goal and the diff")
     ap.add_argument("--no-redact", action="store_true",
                     help="skip the credential scrub (not recommended)")
-    ap.add_argument("--lang", default=config.get("lang", "the language the human used in the transcript"),
-                    help="language for the review")
+    ap.add_argument("--lang", default=config.get("lang", "English"),
+                    help="language for the review (default English; set \"lang\" "
+                         "in .freshair.json to change it permanently)")
     ap.add_argument("--temperature", type=float, default=float(config.get("temperature", 0.7)))
     ap.add_argument("--timeout", type=int, default=int(config.get("timeout", 600)))
     ap.add_argument("--check", action="store_true",
@@ -1118,7 +1119,7 @@ def main() -> None:
         results = list(pool.map(run, models))
 
     # ---- report -----------------------------------------------------------
-    chunks = [f"# 外部意见 / Outside opinion\n\n_{datetime.now(timezone.utc).astimezone():%Y-%m-%d %H:%M} · via {route}_\n"]
+    chunks = [f"# Outside opinion\n\n_{datetime.now(timezone.utc).astimezone():%Y-%m-%d %H:%M} · via {route}_\n"]
     failures = 0
     for r in results:
         if r.get("error"):

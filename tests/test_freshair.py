@@ -713,3 +713,72 @@ class TestOutputIsNotReadBack(unittest.TestCase):
 
     def test_ordinary_prose_is_not_mistaken_for_ours(self):
         self.assertFalse(freshair.is_own_payload("here is my outside opinion on this"))
+
+
+class TestInvokingTheSkillDoesNotPolluteTheGoal(unittest.TestCase):
+    """Running a slash command injects synthetic user turns. None are goals."""
+
+    WRAPPER = ("<command-message>freshair</command-message>\n"
+               "<command-name>/freshair</command-name>\n"
+               "<command-args>look at the caching layer</command-args>")
+    BODY = ("Base directory for this skill: /root/.claude/skills/freshair\n\n"
+            "# FreshAir\n\nOpen a window. Put the work in front of a model...")
+
+    def goal(self, texts):
+        turns = [{"role": "user", "text": t, "ts": ""} for t in texts]
+        return freshair.goal_instructions(turns, 0)
+
+    def test_the_skills_own_documentation_is_not_an_instruction(self):
+        self.assertEqual(self.goal(["the real ask", self.BODY]), ["the real ask"])
+
+    def test_the_command_wrapper_yields_what_the_human_typed(self):
+        self.assertEqual(self.goal([self.WRAPPER]), ["look at the caching layer"])
+
+    def test_a_bare_invocation_with_no_arguments_contributes_nothing(self):
+        bare = ("<command-message>freshair</command-message>\n"
+                "<command-name>/freshair</command-name>")
+        self.assertEqual(self.goal(["the real ask", bare]), ["the real ask"])
+
+    def test_a_full_invocation_adds_exactly_one_instruction(self):
+        """The regression: this used to add the wrapper AND the whole SKILL.md."""
+        self.assertEqual(self.goal(["the real ask", self.WRAPPER, self.BODY]),
+                         ["the real ask", "look at the caching layer"])
+
+    def test_prose_mentioning_a_skill_directory_is_left_alone(self):
+        msg = "the Base directory for this skill: thing you mentioned is wrong"
+        self.assertEqual(self.goal([msg]), [msg])
+
+
+class TestFreshModeRespectsTheBudget(unittest.TestCase):
+    """--budget used to bound only the full-transcript path."""
+
+    def instructions(self, n, size=400):
+        return [f"instruction-{i} " + "x" * size for i in range(n)]
+
+    def test_an_unbounded_goal_is_rendered_whole(self):
+        out = freshair.render_goal(self.instructions(4), budget=None)
+        self.assertEqual(out.count("--- instruction "), 4)
+
+    def test_the_goal_drops_from_the_middle_when_it_will_not_fit(self):
+        out = freshair.render_goal(self.instructions(20), budget=2_000)
+        self.assertIn("instruction-0", out, "the original ask must survive")
+        self.assertIn("instruction-19", out, "the newest steering must survive")
+        self.assertIn("elided to fit", out)
+        self.assertLessEqual(len(out), 2_000)
+
+    def test_two_instructions_are_never_reduced_to_nothing(self):
+        out = freshair.render_goal(self.instructions(2), budget=50)
+        self.assertTrue(out.strip())
+
+    def test_the_diff_is_sacrificed_before_the_goal(self):
+        goal = "GOAL" * 100
+        diff = "\n===== DIFF =====\n" + ("d" * 50_000) + "\n===== END DIFF =====\n"
+        claim = "\n===== CLAIM =====\nclaim\n===== END CLAIM =====\n"
+        g, d, c = freshair.fit_fresh(goal, "", diff, claim, budget=5_000)
+        self.assertEqual(g, goal, "the goal is what everything is judged against")
+        self.assertLess(len(d), len(diff))
+        self.assertLessEqual(len(g) + len(d) + len(c), 5_200)
+
+    def test_nothing_is_trimmed_when_it_already_fits(self):
+        g, d, c = freshair.fit_fresh("goal", "", "diff", "claim", budget=100_000)
+        self.assertEqual((g, d, c), ("goal", "diff", "claim"))

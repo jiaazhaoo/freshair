@@ -1,6 +1,6 @@
 ---
 name: FreshAir
-description: Get an outside opinion on the current work from a model that has not seen this conversation. By default it sends only the original goal and the current state, so the reviewer cannot be anchored by the reasoning that got you here. Routes through a locally installed CLI the user is already signed in to (Codex, Gemini, Claude) or OpenRouter. Use when the conversation has gone long and circular, when the same fix keeps failing, before committing to a big refactor, or whenever the user asks for a second opinion, outside eyes, a sanity check, or says things like "what do you think", "am I overcomplicating this", "are we off track", "freshair", "fresh air", "sanity check", "outside eyes". Also good on a long task before committing to a direction. Not for ordinary code review of a diff.
+description: Get an outside opinion on the current work from a model that has not seen this conversation. By default it sends only the original goal and the current state, so the reviewer cannot be anchored by the reasoning that got you here. Also read this to know when to OFFER an outside read unprompted - the same file reworked repeatedly, the same test failing twice, a decision reversed twice, or a long session with nothing verified. Routes through a locally installed CLI the user is already signed in to (Codex, Gemini, Claude) or OpenRouter. Use when the conversation has gone long and circular, when the same fix keeps failing, before committing to a big refactor, or whenever the user asks for a second opinion, outside eyes, a sanity check, or says things like "what do you think", "am I overcomplicating this", "are we off track", "freshair", "fresh air", "sanity check", "outside eyes". Also good on a long task before committing to a direction. Not for ordinary code review of a diff.
 argument-hint: [what to look at]
 allowed-tools: Bash(python3 *)
 ---
@@ -36,6 +36,35 @@ Either way, **do not pre-digest the conversation.** Do not write a "here's what
 we're doing" summary into the prompt. Your summary preserves the assumptions that
 need challenging — that is the thing being routed around. The script reads the
 session `.jsonl` off disk itself. Just run it.
+
+## Offering it before you are asked
+
+The premise is that a narrowing agent cannot see its own narrowing. So waiting
+to be asked puts the decision in the hands of the one party that has already
+lost the ability to make it. Watch for these instead — each is a state you can
+check about yourself, not a feeling:
+
+- You have edited the same file three or more times this session, and a recent
+  edit undid or reworked an earlier one.
+- The same command or test has failed twice or more, and your fixes are getting
+  longer rather than shorter.
+- You have reversed a decision twice ("actually, let's...").
+- The user has repeated or rephrased a request because your answer missed what
+  they meant.
+- You are about to start something expensive to undo — a refactor across many
+  files, a schema change, picking a dependency.
+- Long session, and nothing has been verified against reality in a while: no
+  test run, no command output, no file read back.
+
+When one of these is true, say so in **one line** and let the user decide:
+
+> We have rewritten this retry logic three times and it is getting longer each
+> time. Want me to run `/freshair` and get an outside read before I try again?
+
+**Suggest; do not invoke.** Running it spends the user's tokens or quota and
+sends their code and tool output off the machine. That is their call, every
+time. One offer is enough — if they decline or ignore it, carry on and do not
+raise it again for that same issue.
 
 ## Running it
 
@@ -73,9 +102,11 @@ you, because a model that shares your weights shares your blind spots:
 | `openrouter` | `OPENROUTER_API_KEY` | any model, but the user pays per call |
 | `claude` | the user's existing Anthropic login | last resort, same vendor as you |
 
-When it falls back to `claude`, the script prints a warning to stderr saying so.
-**Pass that warning on to the user** — a same-vendor review is a much weaker
-signal than it looks, and they should know which one they got.
+When every reviewer is the same vendor as you, the script says so — both on
+stderr and quoted at the top of the report itself, so it reaches the user
+whether or not you relay it. Escaping the context is the main mechanism and it
+does most of the work; a different vendor is an increment on top. Report which
+one they got, without implying the result is worthless — it is not.
 
 ### Options worth knowing
 

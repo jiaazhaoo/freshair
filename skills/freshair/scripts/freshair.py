@@ -711,6 +711,30 @@ BOILERPLATE = {
 # friends. They report on the session, they do not ask for anything.
 HARNESS_NOTICE = re.compile(r"^\[[^\]\n]{0,120}\]$")
 
+# Invoking any slash command injects two synthetic user turns: a wrapper naming
+# the command, and the skill's own SKILL.md body. Left alone, running FreshAir
+# files its own documentation as one of the human's instructions.
+COMMAND_WRAPPER = re.compile(
+    r"^<command-message>.*?</command-message>\s*"
+    r"<command-name>.*?</command-name>\s*"
+    r"(?:<command-args>(?P<args>.*?)</command-args>)?\s*$",
+    re.S,
+)
+SKILL_BODY = re.compile(r"^Base directory for this skill:\s*\S")
+
+
+def unwrap_instruction(text: str) -> str:
+    """The human's words, with harness scaffolding removed.
+
+    Returns "" for a turn that carried no instruction of its own.
+    """
+    if SKILL_BODY.match(text):
+        return ""
+    m = COMMAND_WRAPPER.match(text)
+    if m:
+        return (m.group("args") or "").strip()
+    return text
+
 
 def goal_instructions(turns: list[dict], goal_turns: int) -> list[str]:
     """What the human actually asked for, and nothing the agent said back.
@@ -722,7 +746,7 @@ def goal_instructions(turns: list[dict], goal_turns: int) -> list[str]:
     for turn in turns:
         if turn["role"] != "user":
             continue
-        text = turn["text"].strip()
+        text = unwrap_instruction(turn["text"].strip())
         if not text or text.lower() in BOILERPLATE or HARNESS_NOTICE.match(text):
             continue
         # An instruction cut off mid-send and retyped supersedes the fragment it
@@ -734,14 +758,68 @@ def goal_instructions(turns: list[dict], goal_turns: int) -> list[str]:
     return texts[:goal_turns] if goal_turns > 0 else texts
 
 
-def extract_goal(turns: list[dict], goal_turns: int) -> str:
-    kept = goal_instructions(turns, goal_turns)
+def render_goal(kept: list[str], budget: int | None = None) -> str:
+    """The instructions, dropping from the middle if they will not fit.
+
+    The first instruction is the original ask and the last is the newest
+    steering; losing either is what makes drift invisible, so the middle goes
+    first — the same rule the full-transcript path uses.
+    """
     if not kept:
         return "(no human instructions found in this session)"
-    return "\n\n".join(
-        f"--- instruction {i} ---\n{clip(text, GOAL_TURN_CAP)}"
-        for i, text in enumerate(kept, 1)
-    )
+
+    def render(items: list[str], gap: str = "") -> str:
+        body = "\n\n".join(
+            f"--- instruction {i} ---\n{clip(text, GOAL_TURN_CAP)}"
+            for i, text in enumerate(items, 1)
+        )
+        return body + gap
+
+    out = render(kept)
+    if budget is None or len(out) <= budget or len(kept) <= 2:
+        return out
+
+    head, tail = [kept[0]], [kept[-1]]
+    middle = kept[1:-1]
+    while middle and len(render(head + middle + tail)) > budget:
+        middle.pop(len(middle) // 2)   # drop from the centre outwards
+
+    dropped = len(kept) - len(head) - len(middle) - len(tail)
+    body = render(head + middle + tail)
+    if dropped:
+        body += (f"\n\n--- [{dropped} instruction(s) from the middle were "
+                 f"elided to fit; the original ask and the newest steering are "
+                 f"both intact] ---")
+    return clip(body, budget)
+
+
+def extract_goal(turns: list[dict], goal_turns: int, budget: int | None = None) -> str:
+    return render_goal(goal_instructions(turns, goal_turns), budget)
+
+
+def fit_fresh(goal: str, repo_block: str, diff_block: str, claim_block: str,
+              budget: int) -> tuple[str, str, str]:
+    """Bound the whole fresh payload, sacrificing in order of dispensability.
+
+    The diff is the biggest and the most compressible; the agent's own account
+    is the least trustworthy; the goal is what everything else is judged
+    against, so it is cut last and only from the middle.
+    """
+    room = budget - len(repo_block)
+
+    goal_room = max(room // 2, 2_000)
+    if len(goal) > goal_room:
+        goal = clip(goal, goal_room)
+    room -= len(goal)
+
+    if len(claim_block) > max(room // 4, 0):
+        claim_block = clip(claim_block, room // 4) if room > 0 else ""
+    room -= len(claim_block)
+
+    if len(diff_block) > room:
+        diff_block = clip(diff_block, max(room, 0))
+
+    return goal, diff_block, claim_block
 
 
 def extract_claim(turns: list[dict]) -> str:
@@ -1260,7 +1338,7 @@ def main() -> None:
     verify_rule = VERIFY_RULE_CLI if any_cli else VERIFY_RULE_API
 
     if args.mode == "fresh":
-        goal = extract_goal(turns, args.goal_turns)
+        goal = extract_goal(turns, args.goal_turns, args.budget)
         claim = "" if args.no_claim else extract_claim(turns)
         claim_block = ""
         if claim:
@@ -1275,6 +1353,9 @@ def main() -> None:
                 "\n(No git repository here, so there is no diff to check the "
                 "account against.)\n"
             )
+
+        goal, diff_block, claim_block = fit_fresh(
+            goal, repo_block, diff_block, claim_block, args.budget)
 
         system_msg = SYSTEM_PROMPT_FRESH.format(verify_rule=verify_rule)
         user_msg = USER_TEMPLATE_FRESH.format(
@@ -1320,13 +1401,15 @@ def main() -> None:
                for n in selected}
     warning = ""
     if not [v for v in vendors if v != HOST_VENDOR]:
+        # Escaping the context is the main mechanism and it is doing the work
+        # here; a different vendor is an increment on top, not the pass mark.
+        # Overstating that drives people to skip the tool over setup friction.
         warning = (
-            f"\n⚠️  Every reviewer selected ({', '.join(selected)}) is the same "
-            "vendor as the agent you are already talking to. A fresh context "
-            "window helps, but shared weights mean shared blind spots — this is "
-            "the weak version of a second opinion.\n"
-            "    For a real outsider: install and sign in to codex or gemini, "
-            "or use --backend openrouter.\n"
+            f"\nNote: same vendor as the agent you are talking to "
+            f"({', '.join(selected)}). The fresh context is the main mechanism "
+            "and it is working — that alone finds most of what this tool finds. "
+            "A different vendor additionally covers mistakes both models would "
+            "make; install codex or gemini if you want that too.\n"
         )
     elif len(vendors) == 1:
         warning = (
@@ -1396,7 +1479,9 @@ def main() -> None:
         model = r.get("model", "")
         return model if model.startswith(name) else f"{name} · {model}" if name else model
 
-    chunks = [f"<!-- {OUTPUT_MARKER} -->\n" + f"# Outside opinion\n\n_{datetime.now(timezone.utc).astimezone():%Y-%m-%d %H:%M} · via {route}_\n"]
+    provenance = warning.strip()
+    chunks = [f"<!-- {OUTPUT_MARKER} -->\n" + f"# Outside opinion\n\n_{datetime.now(timezone.utc).astimezone():%Y-%m-%d %H:%M} · via {route}_\n"
+              + (f"\n> {provenance}\n" if provenance else "")]
     failures = 0
     for r in results:
         if r.get("error"):

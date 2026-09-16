@@ -177,8 +177,15 @@ npm i -g @openai/codex      && codex    # sign in with ChatGPT
 npm i -g @google/gemini-cli && gemini   # sign in with Google
 ```
 
-Or configure [OpenRouter](https://openrouter.ai/keys) if you want to name an
-arbitrary model: `export OPENROUTER_API_KEY=...`
+Or use OpenRouter to name an arbitrary model — one command, no environment
+variable to manage:
+
+```bash
+freshair --set-key sk-or-v1-...     # get one at https://openrouter.ai/keys
+```
+
+That writes it to `~/.config/freshair/config.json` with mode 600. A key in the
+*repo* config is refused and says so, because that file gets committed.
 
 Then confirm what actually works on this machine — one real call per backend,
 one token of output each:
@@ -186,6 +193,64 @@ one token of output each:
 ```bash
 python3 ~/.claude/skills/freshair/scripts/freshair.py --check
 ```
+
+## Switching provider and models
+
+Three levels, in increasing order of permanence.
+
+**Per call** — flags win over everything:
+
+```bash
+/freshair -b codex                       # this one time, use Codex
+/freshair -m x-ai/grok-4                 # this one time, one specific model
+/freshair -b all                         # this one time, ask everyone reachable
+```
+
+**Saved as the default** — build the call you want, add `--save-default`:
+
+```bash
+freshair -b openrouter -m openai/gpt-5.1 --save-default
+# Saved as the default: backend=openrouter  models=['openai/gpt-5.1']
+```
+
+After that, plain `/freshair` uses it. No JSON to write by hand.
+
+**Saved as a named profile** — for switching between setups:
+
+```bash
+freshair -b openrouter -m x-ai/grok-4,openai/gpt-5.1,google/gemini-3-pro --save-default council
+freshair -b codex --save-default quick
+```
+
+```bash
+/freshair              # your default: one model, cheap
+/freshair -p quick     # local Codex, no API cost
+/freshair -p council   # three models in parallel, cross-vendor
+```
+
+To see what is set and where it came from:
+
+```bash
+freshair --show-config
+```
+
+```
+Resolved:
+  backend  openrouter
+  models   openai/gpt-5.1
+  api_key  sk-or-v1-abc...  [~/.config/freshair/config.json]
+
+Profiles:
+  -p council      backend=openrouter  models=x-ai/grok-4,openai/gpt-5.1,google/gemini-3-pro
+  -p quick        backend=codex
+
+Reachable right now: claude, openrouter
+```
+
+Precedence, highest first: command-line flags, then `-p` profile, then
+`.freshair.json` in the repo, then `~/.config/freshair/config.json`. The
+OpenRouter key is the exception — an `OPENROUTER_API_KEY` in the environment
+always wins, so CI can override a stored one.
 
 ## Usage
 
@@ -219,6 +284,10 @@ python3 $F --dry-run                # show exactly what would be sent, call noth
 | `--goal-turns N` | Use only the first N human instructions as the goal |
 | `--no-claim` | Withhold the agent's own progress summary too, leaving only the goal and the diff |
 | `-b, --backend` | `auto` (default) / `all` / `codex` / `gemini` / `claude` / `openrouter`. Repeat it to ask several independent reviewers at once |
+| `-p, --profile` | Use a saved profile |
+| `--save-default [NAME]` | Remember this call's `-b`/`-m` choice, as the default or as a named profile |
+| `--set-key KEY` | Store an OpenRouter key in the user config (mode 600) |
+| `--show-config` | Print every setting, where it came from, and what is reachable |
 | `--from` | `claude` or `codex` — which host's session to read. Defaults to the most recent |
 | `-m, --model` | Model id; repeat or comma-separate to run several in parallel. With more than one backend these apply to `openrouter` only, since model ids are not portable between vendors |
 | `--check` | Probe every backend with a one-token call and print the exact command used |
@@ -288,7 +357,7 @@ out.
 python3 -m unittest discover -s tests -v
 ```
 
-83 tests covering transcript parsing for both hosts (Claude Code, and Codex in
+102 tests covering transcript parsing for both hosts (Claude Code, and Codex in
 both its record generations) (role labelling, sidechain filtering,
 system-reminder stripping, tool-output capping), goal extraction (human
 instructions only, boilerplate and harness notices rejected, retyped

@@ -1105,9 +1105,9 @@ def check_backends(backends: dict[str, dict], selected: list[str],
 
     for name in selected:
         if name == "openrouter":
-            key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+            key = openrouter_key(config)
             if not key:
-                emit("  ✗ openrouter — OPENROUTER_API_KEY is not set")
+                emit("  ✗ openrouter — no key; run --set-key sk-or-v1-...")
                 failures += 1
                 continue
             model = (config.get("models") or DEFAULT_MODELS)[0]
@@ -1147,7 +1147,7 @@ def resolve_backends(config: dict) -> dict[str, dict]:
     return merged
 
 
-def reachable_backends(backends: dict[str, dict]) -> list[str]:
+def reachable_backends(backends: dict[str, dict], api_key: str = "") -> list[str]:
     """Every reviewer this machine can actually reach, outsiders first.
 
     Independent reviewers that never saw each other's answers are the point:
@@ -1156,12 +1156,12 @@ def reachable_backends(backends: dict[str, dict]) -> list[str]:
     order = [b for b in AUTO_ORDER if b in backends]
     order += [b for b in backends if b not in order]
     found = [n for n in order if shutil.which(backends[n]["cmd"][0])]
-    if os.environ.get("OPENROUTER_API_KEY", "").strip():
+    if api_key or os.environ.get("OPENROUTER_API_KEY", "").strip():
         found.append("openrouter")
     return found
 
 
-def detect_backend(backends: dict[str, dict]) -> str:
+def detect_backend(backends: dict[str, dict], api_key: str = "") -> str:
     """Pick a backend the user is already signed in to, outsiders first."""
     order = [b for b in AUTO_ORDER if b in backends]
     order += [b for b in backends if b not in order]
@@ -1171,7 +1171,7 @@ def detect_backend(backends: dict[str, dict]) -> str:
         if shutil.which(backends[name]["cmd"][0]):
             return name
 
-    if os.environ.get("OPENROUTER_API_KEY", "").strip():
+    if api_key or os.environ.get("OPENROUTER_API_KEY", "").strip():
         return "openrouter"
 
     for name in order:
@@ -1188,17 +1188,104 @@ def die(msg: str) -> None:
     sys.exit(1)
 
 
+USER_CONFIG = Path.home() / ".config" / "freshair" / "config.json"
+
+
+def config_files(cwd: Path) -> list[tuple[Path, dict]]:
+    """User-global first, then per-repo — later files win on conflict."""
+    found = []
+    for path in (USER_CONFIG,
+                 Path.home() / ".config" / "wdyt" / "config.json",   # pre-rename
+                 cwd / ".freshair.json",
+                 cwd / ".wdyt.json"):                                # pre-rename
+        if not path.is_file():
+            continue
+        try:
+            found.append((path, json.loads(path.read_text(encoding="utf-8"))))
+        except json.JSONDecodeError:
+            print(f"freshair: ignoring malformed config at {path}", file=sys.stderr)
+    return found
+
+
 def load_config(cwd: Path) -> dict:
-    for path in (cwd / ".freshair.json",
-                 Path.home() / ".config" / "freshair" / "config.json",
-                 cwd / ".wdyt.json",                              # pre-rename names
-                 Path.home() / ".config" / "wdyt" / "config.json"):
-        if path.is_file():
-            try:
-                return json.loads(path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                print(f"freshair: ignoring malformed config at {path}", file=sys.stderr)
-    return {}
+    merged: dict = {}
+    for path, data in config_files(cwd):
+        if "api_key" in data and path not in (USER_CONFIG,
+                                              Path.home() / ".config" / "wdyt" / "config.json"):
+            # A repo config gets committed. A key belongs in the user-global
+            # one, which does not.
+            print(f"freshair: ignoring api_key in {path} — it would be committed. "
+                  f"Use --set-key, which writes to {USER_CONFIG}.", file=sys.stderr)
+            data = {k: v for k, v in data.items() if k != "api_key"}
+        merged.update(data)
+    return merged
+
+
+def openrouter_key(config: dict) -> str:
+    """Environment first, so a shell export still overrides a stored key."""
+    return (os.environ.get("OPENROUTER_API_KEY", "").strip()
+            or str(config.get("api_key", "")).strip())
+
+
+def write_user_config(update: dict) -> Path:
+    USER_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    current = {}
+    if USER_CONFIG.is_file():
+        try:
+            current = json.loads(USER_CONFIG.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            pass
+    current.update({k: v for k, v in update.items() if v is not None})
+    USER_CONFIG.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
+    try:
+        USER_CONFIG.chmod(0o600)   # it can hold a key
+    except OSError:
+        pass
+    return USER_CONFIG
+
+
+def apply_profile(config: dict, name: str) -> dict:
+    profiles = config.get("profiles") or {}
+    if name not in profiles:
+        known = ", ".join(profiles) or "(none defined)"
+        die(f"no profile named {name!r}. Defined in {USER_CONFIG}: {known}")
+    return profiles[name] or {}
+
+
+def describe_config(cwd: Path, backends: dict) -> None:
+    print("Config files, in order of precedence (later wins):")
+    files = config_files(cwd)
+    if not files:
+        print(f"  (none) — --set-key or --save-default will create {USER_CONFIG}")
+    for path, data in files:
+        keys = ", ".join(k for k in data if k != "api_key")
+        secret = " api_key=set" if data.get("api_key") else ""
+        print(f"  {path}\n      {keys or '(empty)'}{secret}")
+
+    config = load_config(cwd)
+    print("\nResolved:")
+    print(f"  backend  {config.get('backend', 'auto')}")
+    print(f"  models   {', '.join(config.get('models') or DEFAULT_MODELS)}")
+    print(f"  mode     {config.get('mode', 'fresh')}")
+
+    key = openrouter_key(config)
+    where = ("OPENROUTER_API_KEY" if os.environ.get("OPENROUTER_API_KEY", "").strip()
+             else str(USER_CONFIG) if key else "not set")
+    print(f"  api_key  {(key[:12] + '...') if key else '(none)'}  [{where}]")
+
+    profiles = config.get("profiles") or {}
+    print("\nProfiles:" if profiles else "\nProfiles: (none) — see --save-default")
+    for name, body in profiles.items():
+        bits = []
+        if body.get("backend"):
+            bits.append(f"backend={body['backend']}")
+        if body.get("models"):
+            bits.append("models=" + ",".join(body["models"]))
+        print(f"  -p {name:<12} {'  '.join(bits)}")
+
+    print("\nReachable right now: "
+          + (", ".join(reachable_backends(backends, openrouter_key(config)))
+             or "(nothing — see --check)"))
 
 
 def main() -> None:
@@ -1259,6 +1346,18 @@ def main() -> None:
                          "in .freshair.json to change it permanently)")
     ap.add_argument("--temperature", type=float, default=float(config.get("temperature", 0.7)))
     ap.add_argument("--timeout", type=int, default=int(config.get("timeout", 600)))
+    ap.add_argument("-p", "--profile",
+                    help="use a saved profile (see --show-config for the list)")
+    ap.add_argument("--save-default", nargs="?", const="", metavar="NAME",
+                    help="remember this call's --backend/--model choice. Bare, "
+                         "it becomes the default; with a NAME it becomes a "
+                         "profile you select with -p NAME.")
+    ap.add_argument("--set-key", metavar="KEY",
+                    help="store an OpenRouter key in the user config (mode 600) "
+                         "so no environment variable is needed")
+    ap.add_argument("--show-config", action="store_true",
+                    help="print where every setting comes from, and what is "
+                         "reachable right now")
     ap.add_argument("--check", action="store_true",
                     help="probe each backend with a one-token prompt and report "
                          "which ones actually work on this machine")
@@ -1267,6 +1366,42 @@ def main() -> None:
     ap.add_argument("--save", metavar="PATH", help="also write the review to this file")
     args = ap.parse_args()
 
+    if args.set_key:
+        path = write_user_config({"api_key": args.set_key.strip()})
+        print(f"Stored OpenRouter key in {path} (mode 600).")
+        print("Nothing else to do — it is picked up automatically. "
+              "An OPENROUTER_API_KEY in the environment still wins if set.")
+        return
+
+    if args.save_default is not None:
+        chosen_backends = [b.strip() for e in args.backend for b in e.split(",") if b.strip()]
+        chosen_models = [m.strip() for e in args.model for m in e.split(",") if m.strip()]
+        if not chosen_backends and not chosen_models:
+            die("--save-default needs something to save: pass -b and/or -m "
+                "alongside it, e.g. -b openrouter -m openai/gpt-5.1 --save-default")
+        entry = {}
+        if chosen_backends:
+            entry["backend"] = ",".join(chosen_backends)
+        if chosen_models:
+            entry["models"] = chosen_models
+
+        if args.save_default:                      # a named profile
+            existing = load_config(cwd).get("profiles") or {}
+            existing[args.save_default] = entry
+            path = write_user_config({"profiles": existing})
+            print(f"Saved profile {args.save_default!r} in {path}.")
+            print(f"Use it with:  /freshair -p {args.save_default}")
+        else:                                      # the default for every call
+            path = write_user_config(entry)
+            print(f"Saved as the default in {path}: "
+                  + "  ".join(f"{k}={v}" for k, v in entry.items()))
+            print("Use it with:  /freshair")
+        return
+
+    if args.show_config:
+        describe_config(cwd, backends)
+        return
+
     if args.check:
         asked = [b.strip() for entry in args.backend for b in entry.split(",") if b.strip()]
         selected = ([b for b in asked if b not in ("auto", "all")]
@@ -1274,17 +1409,22 @@ def main() -> None:
         print("Probing backends (a real call each, one token of output):")
         sys.exit(1 if check_backends(backends, selected, config, args.timeout, cwd) else 0)
 
+    profile = apply_profile(config, args.profile) if args.profile else {}
+    api_key = openrouter_key(config)
+
     requested: list[str] = []
-    for entry in (args.backend or [config.get("backend", "auto")]):
+    for entry in (args.backend
+                  or ([profile["backend"]] if profile.get("backend") else None)
+                  or [config.get("backend", "auto")]):
         requested.extend(b.strip() for b in entry.split(",") if b.strip())
 
     selected: list[str] = []
     for name in requested:
         if name == "auto":
-            selected.append(detect_backend(backends))
+            selected.append(detect_backend(backends, api_key))
         elif name == "all":
             # Every independent reviewer this machine can actually reach.
-            selected.extend(reachable_backends(backends))
+            selected.extend(reachable_backends(backends, api_key))
         elif name == "openrouter" or name in backends:
             selected.append(name)
         else:
@@ -1299,12 +1439,13 @@ def main() -> None:
     any_cli = any(b != "openrouter" for b in selected)
 
     asked_models: list[str] = []
-    for entry in args.model:
+    for entry in (args.model or profile.get("models") or []):
         asked_models.extend(m.strip() for m in entry.split(",") if m.strip())
 
     def models_for(name: str) -> list[str | None]:
         if name == "openrouter":
-            return list(asked_models or config.get("models") or DEFAULT_MODELS)
+            return list(asked_models or profile.get("models")
+                        or config.get("models") or DEFAULT_MODELS)
         # Model ids are not portable between vendors, so an explicit -m only
         # reaches a CLI backend when it is the only one running.
         if asked_models and len(selected) == 1:
@@ -1445,13 +1586,13 @@ def main() -> None:
         return
 
     # ---- dispatch ---------------------------------------------------------
-    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     for name in selected:
         if name == "openrouter":
             if not api_key:
-                die("OPENROUTER_API_KEY is not set. Either get a key at "
-                    "https://openrouter.ai/keys, or use a CLI you are already "
-                    "signed in to: --backend codex | gemini | claude")
+                die("No OpenRouter key. Either store one with\n"
+                    "    freshair --set-key sk-or-v1-...\n"
+                    "(get it at https://openrouter.ai/keys), or use a CLI you "
+                    "are already signed in to: --backend codex | gemini | claude")
         elif not shutil.which(backends[name]["cmd"][0]):
             die(f"backend {name!r} needs {backends[name]['cmd'][0]!r} on PATH, "
                 f"and it is not there.\nInstall and sign in to it, pick another "

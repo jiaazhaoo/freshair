@@ -782,3 +782,99 @@ class TestFreshModeRespectsTheBudget(unittest.TestCase):
     def test_nothing_is_trimmed_when_it_already_fits(self):
         g, d, c = freshair.fit_fresh("goal", "", "diff", "claim", budget=100_000)
         self.assertEqual((g, d, c), ("goal", "diff", "claim"))
+
+
+class TestConfigLayer(unittest.TestCase):
+    """Set it once, switch it per call."""
+
+    def home(self, stack):
+        d = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+        stack.enter_context(mock.patch.object(freshair.Path, "home", return_value=d))
+        stack.enter_context(mock.patch.object(freshair, "USER_CONFIG",
+                                              d / ".config" / "freshair" / "config.json"))
+        return d
+
+    def test_a_stored_key_is_found_without_any_environment_variable(self):
+        import contextlib
+        with contextlib.ExitStack() as stack:
+            self.home(stack)
+            stack.enter_context(mock.patch.dict(os.environ, {}, clear=True))
+            freshair.write_user_config({"api_key": "sk-or-v1-stored"})
+            with tempfile.TemporaryDirectory() as repo:
+                self.assertEqual(freshair.openrouter_key(freshair.load_config(Path(repo))),
+                                 "sk-or-v1-stored")
+
+    def test_the_environment_still_wins_over_a_stored_key(self):
+        import contextlib
+        with contextlib.ExitStack() as stack:
+            self.home(stack)
+            stack.enter_context(mock.patch.dict(
+                os.environ, {"OPENROUTER_API_KEY": "sk-or-v1-env"}, clear=True))
+            freshair.write_user_config({"api_key": "sk-or-v1-stored"})
+            with tempfile.TemporaryDirectory() as repo:
+                self.assertEqual(freshair.openrouter_key(freshair.load_config(Path(repo))),
+                                 "sk-or-v1-env")
+
+    def test_a_key_in_the_repo_config_is_refused(self):
+        """That file gets committed."""
+        import contextlib
+        with contextlib.ExitStack() as stack:
+            self.home(stack)
+            with tempfile.TemporaryDirectory() as repo:
+                (Path(repo) / ".freshair.json").write_text(
+                    '{"api_key": "sk-or-v1-leaked", "backend": "codex"}', encoding="utf-8")
+                config = freshair.load_config(Path(repo))
+            self.assertNotIn("api_key", config)
+            self.assertEqual(config["backend"], "codex", "non-secrets still apply")
+
+    def test_the_repo_config_overrides_the_user_one_setting_by_setting(self):
+        import contextlib
+        with contextlib.ExitStack() as stack:
+            self.home(stack)
+            freshair.write_user_config({"backend": "openrouter", "mode": "full"})
+            with tempfile.TemporaryDirectory() as repo:
+                (Path(repo) / ".freshair.json").write_text(
+                    '{"backend": "codex"}', encoding="utf-8")
+                config = freshair.load_config(Path(repo))
+            self.assertEqual(config["backend"], "codex")
+            self.assertEqual(config["mode"], "full", "untouched settings survive")
+
+    def test_the_stored_key_makes_openrouter_reachable(self):
+        with mock.patch.object(freshair.shutil, "which", return_value=None):
+            self.assertIn("openrouter",
+                          freshair.reachable_backends(freshair.resolve_backends({}),
+                                                      api_key="sk-or-v1-x"))
+            self.assertEqual(freshair.detect_backend(freshair.resolve_backends({}),
+                                                     api_key="sk-or-v1-x"), "openrouter")
+
+    def test_a_saved_profile_comes_back(self):
+        import contextlib
+        with contextlib.ExitStack() as stack:
+            self.home(stack)
+            freshair.write_user_config(
+                {"profiles": {"council": {"backend": "all",
+                                          "models": ["x-ai/grok-4"]}}})
+            with tempfile.TemporaryDirectory() as repo:
+                config = freshair.load_config(Path(repo))
+            self.assertEqual(freshair.apply_profile(config, "council")["backend"], "all")
+
+    def test_an_unknown_profile_says_which_ones_exist(self):
+        with self.assertRaises(SystemExit):
+            freshair.apply_profile({"profiles": {"council": {}}}, "nope")
+
+    def test_writing_the_config_does_not_clobber_other_settings(self):
+        import contextlib
+        with contextlib.ExitStack() as stack:
+            self.home(stack)
+            freshair.write_user_config({"api_key": "sk-or-v1-x"})
+            freshair.write_user_config({"backend": "codex"})
+            data = json.loads(freshair.USER_CONFIG.read_text(encoding="utf-8"))
+            self.assertEqual(data["api_key"], "sk-or-v1-x")
+            self.assertEqual(data["backend"], "codex")
+
+    def test_the_stored_config_is_not_world_readable(self):
+        import contextlib, stat
+        with contextlib.ExitStack() as stack:
+            self.home(stack)
+            path = freshair.write_user_config({"api_key": "sk-or-v1-x"})
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)

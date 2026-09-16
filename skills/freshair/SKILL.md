@@ -116,6 +116,7 @@ one they got, without implying the result is worthless — it is not.
 | `--goal-turns N` | Use only the first N human instructions as the goal. Handy when a long session has accumulated steering that muddies the original ask. |
 | `--no-claim` | Drop the agent's own account of where things stand, leaving the reviewer nothing but the goal and the diff. |
 | `-b, --backend` | `codex`, `gemini`, `claude`, `openrouter`. Repeat it, or pass `all`, to ask several independent reviewers at once. |
+| `-p, --profile` | A setup the user saved. `--show-config` lists them. |
 | `--from` | `claude` or `codex` — which host's session to read. Defaults to the most recent. |
 | `-m, --model` | Model id. Repeat or comma-separate to run several in parallel. Omit on a CLI backend to use its own default. |
 | `--check` | Probe every backend with a one-token prompt and report which ones actually work here. Run this first when a backend fails. |
@@ -155,9 +156,19 @@ exact command line it used, which separates "not installed" from "installed but
 the flags have changed upstream". Relay what it says. Do not go hunting through
 the user's files for an API key.
 
-Per-repo defaults live in `.freshair.json` (see `.freshair.example.json` in the repo
-root). Every backend's command line is overridable there, so a changed upstream
-flag is a config edit, not a code change.
+If the user wants a different provider or model set, do not hand-edit JSON for
+them — the script writes its own config:
+
+```bash
+freshair --set-key sk-or-v1-...                          # store an OpenRouter key
+freshair -b openrouter -m openai/gpt-5.1 --save-default  # make it the default
+freshair -b all --save-default council                   # save it as -p council
+freshair --show-config                                   # what is set, and from where
+```
+
+Per-repo overrides still live in `.freshair.json`, including each backend's
+command line, so a changed upstream flag is a config edit rather than a patch.
+A key there is refused — it would be committed.
 
 ## Where the reviewer runs
 

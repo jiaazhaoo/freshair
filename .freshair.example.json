@@ -1,26 +1,30 @@
 {
-  "//": "Copy to .freshair.json. Every field is optional.",
+  "//": "Copy to .freshair.json for per-repo settings. Every field is optional.",
+  "//key": "No api_key here - this file gets committed. Use: freshair --set-key",
 
   "backend": "auto",
-
+  "mode": "fresh",
   "models": ["openai/gpt-5.1", "google/gemini-3-pro"],
 
   "budget": 140000,
-  "head_turns": 6,
+  "goal_turns": 0,
   "temperature": 0.7,
   "timeout": 600,
 
-  "//backends": "Override a CLI backend's command line here when an upstream flag changes, instead of patching the script. 'tail' is appended after the model flag, for a stdin sentinel or a variadic list.",
+  "//profiles": "Selected with -p NAME. Easier to create with --save-default NAME.",
+  "profiles": {
+    "quick": { "backend": "codex" },
+    "council": {
+      "backend": "openrouter",
+      "models": ["x-ai/grok-4", "openai/gpt-5.1", "google/gemini-3-pro"]
+    }
+  },
+
+  "//backends": "Override a CLI backend's command line when an upstream flag changes. 'tail' is appended after the model flag, for a stdin sentinel or a variadic list.",
   "backends": {
     "codex": {
       "cmd": ["codex", "exec", "--sandbox", "read-only", "--ask-for-approval", "never"],
       "tail": ["-"],
-      "model_flag": "-m",
-      "models": []
-    },
-    "gemini": {
-      "cmd": ["gemini"],
-      "tail": [],
       "model_flag": "-m"
     }
   }

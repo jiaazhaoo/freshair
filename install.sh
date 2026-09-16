@@ -20,11 +20,23 @@ fi
 
 mkdir -p "${HOME}/.claude/skills"
 
+install_to() {          # $1 = destination skills dir, $2 = source, $3 = link|copy
+  mkdir -p "$(dirname "$1")"
+  if [ -e "$1" ] || [ -L "$1" ]; then rm -rf "$1"; fi
+  if [ "$3" = "link" ]; then ln -s "$2" "$1"; else cp -R "$2" "$1"; fi
+}
+
+# Codex keeps its skills somewhere else, and only gets one if it is installed.
+CODEX_DEST="${CODEX_HOME:-$HOME/.codex}/skills/freshair"
+
 if [ -n "$here" ] && [ -d "$here/skills/freshair" ]; then
   # From a clone: symlink, so the installed skill follows the working tree.
-  if [ -e "$DEST" ] || [ -L "$DEST" ]; then rm -rf "$DEST"; fi
-  ln -s "$here/skills/freshair" "$DEST"
+  install_to "$DEST" "$here/skills/freshair" link
   echo "✓ Linked $DEST -> $here/skills/freshair"
+  if [ -d "${CODEX_HOME:-$HOME/.codex}" ]; then
+    install_to "$CODEX_DEST" "$here/skills/freshair" link
+    echo "✓ Linked $CODEX_DEST  (Codex found)"
+  fi
 else
   # Piped from curl: fetch just this repo's tarball, no git required.
   command -v curl >/dev/null 2>&1 || die "curl is required"
@@ -43,16 +55,22 @@ else
   done
   [ -n "$src" ] || die "no skills/freshair in ${REPO}@${REF}"
 
-  if [ -e "$DEST" ] || [ -L "$DEST" ]; then rm -rf "$DEST"; fi
-  cp -R "$src" "$DEST"
+  install_to "$DEST" "$src" copy
   echo "✓ Installed $DEST  (${REPO}@${REF})"
+  if [ -d "${CODEX_HOME:-$HOME/.codex}" ]; then
+    install_to "$CODEX_DEST" "$src" copy
+    echo "✓ Installed $CODEX_DEST  (Codex found)"
+  fi
 fi
 
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null \
   || echo "! python3 3.9+ not found on PATH — FreshAir needs it to run"
 
 echo
-echo "Use it in any Claude Code session:  /freshair"
+echo "Claude Code:  /freshair"
+if [ -d "${CODEX_HOME:-$HOME/.codex}" ]; then
+  echo "Codex:        \$freshair   (restart Codex to pick it up)"
+fi
 echo
 
 # Which reviewers can this machine actually reach?

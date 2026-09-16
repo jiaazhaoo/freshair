@@ -40,18 +40,26 @@ session `.jsonl` off disk itself. Just run it.
 ## Running it
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/freshair.py" --session-id "${CLAUDE_SESSION_ID}" $ARGUMENTS
+python3 "${CLAUDE_SKILL_DIR:-${CODEX_HOME:-$HOME/.codex}/skills/freshair}/scripts/freshair.py"
 ```
 
-That is the whole invocation. It finds the transcript, picks a backend the user
-is already signed in to, and prints the review to stdout.
-
-Add a focus when the user pointed at something specific — it goes in
-`$ARGUMENTS`:
+`CLAUDE_SKILL_DIR` is set inside Claude Code; the fallback covers Codex,
+including a custom `CODEX_HOME`, where the script sits next to this file. Append whatever the user asked you to focus
+on as a quoted argument:
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/scripts/freshair.py" "is the caching layer worth it"
+python3 "${CLAUDE_SKILL_DIR:-${CODEX_HOME:-$HOME/.codex}/skills/freshair}/scripts/freshair.py" "is the caching layer worth it"
 ```
+
+In Claude Code you may also pass `--session-id "${CLAUDE_SESSION_ID}"` if
+autodetection picks the wrong session.
+
+### Which session it reads
+
+It reviews the most recently written session for this directory, from either
+host: Claude Code (`~/.claude/projects/...`) or Codex
+(`$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl`). Force one with
+`--from claude` or `--from codex`.
 
 ### Backends
 
@@ -76,7 +84,8 @@ signal than it looks, and they should know which one they got.
 | `--mode` | `fresh` (default) or `full` — see above. |
 | `--goal-turns N` | Use only the first N human instructions as the goal. Handy when a long session has accumulated steering that muddies the original ask. |
 | `--no-claim` | Drop the agent's own account of where things stand, leaving the reviewer nothing but the goal and the diff. |
-| `-b, --backend` | Force one: `codex`, `gemini`, `claude`, `openrouter`. |
+| `-b, --backend` | `codex`, `gemini`, `claude`, `openrouter`. Repeat it, or pass `all`, to ask several independent reviewers at once. |
+| `--from` | `claude` or `codex` — which host's session to read. Defaults to the most recent. |
 | `-m, --model` | Model id. Repeat or comma-separate to run several in parallel. Omit on a CLI backend to use its own default. |
 | `--check` | Probe every backend with a one-token prompt and report which ones actually work here. Run this first when a backend fails. |
 | `--dry-run` | Print the exact payload and the exact command, call nothing. Use this if the user asks what will be sent. |
@@ -99,8 +108,11 @@ that makes this skill worthless.
    land, which are wrong, and where the outside model lacked context that you
    have. Disagreeing is fine and often correct. What is not fine is skipping a
    criticism because it stings.
-4. If several models were asked, say where they agreed. Agreement between models
-   that were never in the conversation is the strongest signal you will get.
+4. If several reviewers were asked, **lead with where they independently
+   agreed**. They never saw each other's answers, so convergence is the
+   strongest signal available. Something only one of them raised is a lead, not
+   a finding — say which it was. Where they contradict each other, that
+   disagreement is usually the most interesting part of the whole report.
 5. Ask the user what they want to do. Do not start acting on the review
    unprompted — an outside model with partial context can confidently send you
    somewhere worse.

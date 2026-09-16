@@ -61,9 +61,15 @@ summarize "what we're doing" means it filters out whatever it considers
 unimportant — which is precisely where it drifted. The act of summarizing
 destroys the thing you wanted examined.
 
-So the design routes around the agent: the script reads
-`~/.claude/projects/<project>/<session>.jsonl` off disk itself and picks out
-what the human said. The agent never gets a chance to narrate.
+So the design routes around the agent: the script reads the session log off
+disk itself and picks out what the human said. The agent never gets a chance to
+narrate.
+
+It reads both hosts — Claude Code (`~/.claude/projects/...`) and Codex
+(`$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl`, both current
+`response_item` and legacy `event_msg` records) — and reviews whichever session
+for this directory was written most recently. Force one with `--from claude` or
+`--from codex`.
 
 This is also why a diff alone is not enough: a diff shows what changed, not what
 was asked for. The goal has to be the human's own words, not something inferred
@@ -92,6 +98,35 @@ scratch directory, with the repo handed back as a readable path. They can open a
 file to check a claim; they cannot change anything, and they cannot write into
 the session log they are reviewing.
 
+## Getting a genuinely independent reviewer
+
+"A different model" is the weakest version of independence. Four things actually
+separate a reviewer from the agent that is stuck, in rough order of how much
+they buy you:
+
+1. **A different context.** `--mode fresh`, the default. A reviewer that reads
+   the reasoning first is anchored by it before it forms a view.
+2. **A different vendor.** Different weights, different training, different
+   failure modes. `--backend auto` prefers a vendor other than the host's and
+   warns when it cannot find one.
+3. **More than one, asked independently.** This is the big one:
+
+   ```bash
+   /freshair -b all              # every reviewer this machine can reach
+   /freshair -b codex -b gemini  # or name them
+   ```
+
+   They run in parallel and never see each other's answers. **Where two
+   independently land on the same problem, that is the strongest signal
+   available.** Something only one raises is a lead, not a finding. Where they
+   contradict each other is usually the most interesting part of the report.
+4. **Nothing of the agent's narration.** `--no-claim` drops even the agent's own
+   summary of where things stand, leaving the reviewer the goal and the diff and
+   nothing else.
+
+Running with one same-vendor CLI gets you (1) only. Running `-b all` on a
+machine with Codex and Gemini signed in gets you all four.
+
 ## Install
 
 One command. No clone, no git:
@@ -100,8 +135,11 @@ One command. No clone, no git:
 curl -fsSL https://raw.githubusercontent.com/jiaazhaoo/what-do-you-think/main/install.sh | bash
 ```
 
-It installs to `~/.claude/skills/freshair` and works in every project. Then type
-`/freshair` in any Claude Code session.
+It installs to `~/.claude/skills/freshair`, and also to
+`$CODEX_HOME/skills/freshair` when Codex is present. Then:
+
+- **Claude Code**: `/freshair`
+- **Codex**: `$freshair` (restart Codex so it picks the skill up)
 
 Python 3.9+ standard library only. No `pip install`.
 
@@ -180,8 +218,9 @@ python3 $F --dry-run                # show exactly what would be sent, call noth
 | `--mode` | `fresh` (default: goal + current state) or `full` (whole transcript, for "which turn went wrong") |
 | `--goal-turns N` | Use only the first N human instructions as the goal |
 | `--no-claim` | Withhold the agent's own progress summary too, leaving only the goal and the diff |
-| `-b, --backend` | `auto` (default) / `codex` / `gemini` / `claude` / `openrouter` |
-| `-m, --model` | Model id; repeat or comma-separate to run several in parallel |
+| `-b, --backend` | `auto` (default) / `all` / `codex` / `gemini` / `claude` / `openrouter`. Repeat it to ask several independent reviewers at once |
+| `--from` | `claude` or `codex` — which host's session to read. Defaults to the most recent |
+| `-m, --model` | Model id; repeat or comma-separate to run several in parallel. With more than one backend these apply to `openrouter` only, since model ids are not portable between vendors |
 | `--check` | Probe every backend with a one-token call and print the exact command used |
 | `--dry-run` | Print the full payload and the command, send nothing |
 | `--thinking` | Include the agent's thinking blocks (roughly doubles the payload) |
@@ -249,7 +288,8 @@ out.
 python3 -m unittest discover -s tests -v
 ```
 
-61 tests covering transcript parsing (role labelling, sidechain filtering,
+83 tests covering transcript parsing for both hosts (Claude Code, and Codex in
+both its record generations) (role labelling, sidechain filtering,
 system-reminder stripping, tool-output capping), goal extraction (human
 instructions only, boilerplate and harness notices rejected, retyped
 instructions deduplicated), budget fitting, credential redaction, self-

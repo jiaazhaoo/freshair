@@ -505,3 +505,211 @@ class TestCurrentStateOnACleanTree(unittest.TestCase):
     def test_outside_a_repo_returns_nothing(self):
         with tempfile.TemporaryDirectory() as d:
             self.assertEqual(freshair.repo_context(Path(d)), ("", ""))
+
+
+def write_codex_rollout(home: Path, cwd: str, records) -> Path:
+    """A rollout file shaped the way Codex writes them."""
+    day = home / "sessions" / "2026" / "09" / "16"
+    day.mkdir(parents=True, exist_ok=True)
+    path = day / "rollout-2026-09-16T10-00-00-abc123.jsonl"
+    with path.open("w", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "type": "session_meta",
+            "payload": {"id": "abc123", "cwd": cwd, "cli_version": "0.150.0"},
+        }) + "\n")
+        for rec in records:
+            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    return path
+
+
+def codex_msg(role, text):
+    kind = "input_text" if role == "user" else "output_text"
+    return {"type": "response_item",
+            "payload": {"type": "message", "role": role,
+                        "content": [{"type": kind, "text": text}]}}
+
+
+class TestCodexSessions(unittest.TestCase):
+    """Codex files sessions differently from Claude Code, in two generations."""
+
+    def test_current_format_messages_are_read(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = write_codex_rollout(Path(home), "/repo", [
+                codex_msg("user", "build the thing"),
+                codex_msg("assistant", "starting on it"),
+            ])
+            turns = freshair.parse_codex(path, keep_thinking=False)
+            self.assertEqual([(t["role"], t["text"]) for t in turns],
+                             [("user", "build the thing"),
+                              ("assistant", "starting on it")])
+
+    def test_tool_calls_and_their_output_are_labelled(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = write_codex_rollout(Path(home), "/repo", [
+                codex_msg("user", "list the files"),
+                {"type": "response_item", "payload": {
+                    "type": "function_call", "name": "shell",
+                    "arguments": '{"command":"ls -la"}'}},
+                {"type": "response_item", "payload": {
+                    "type": "function_call_output", "output": "total 16"}},
+            ])
+            turns = freshair.parse_codex(path, keep_thinking=False)
+            self.assertIn("[tool: shell]", turns[1]["text"])
+            self.assertIn("ls -la", turns[1]["text"])
+            self.assertEqual(turns[2]["role"], "tool")
+            self.assertIn("total 16", turns[2]["text"])
+
+    def test_tool_records_alone_do_not_outrank_a_real_legacy_conversation(self):
+        """A response_item stream with no messages is not a conversation."""
+        with tempfile.TemporaryDirectory() as home:
+            path = write_codex_rollout(Path(home), "/repo", [
+                {"type": "response_item", "payload": {
+                    "type": "function_call", "name": "shell", "arguments": "{}"}},
+                {"type": "event_msg", "payload": {
+                    "type": "user_message", "message": "the real ask"}},
+            ])
+            turns = freshair.parse_codex(path, keep_thinking=False)
+            self.assertEqual([t["text"] for t in turns], ["the real ask"])
+
+    def test_developer_scaffolding_is_not_the_conversation(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = write_codex_rollout(Path(home), "/repo", [
+                codex_msg("developer", "system scaffolding"),
+                codex_msg("user", "the real ask"),
+            ])
+            turns = freshair.parse_codex(path, keep_thinking=False)
+            self.assertEqual(len(turns), 1)
+            self.assertEqual(turns[0]["text"], "the real ask")
+
+    def test_reasoning_follows_the_thinking_flag(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = write_codex_rollout(Path(home), "/repo", [
+                {"type": "response_item", "payload": {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "hmm"}]}},
+                codex_msg("assistant", "answer"),
+            ])
+            self.assertEqual(len(freshair.parse_codex(path, False)), 1)
+            self.assertIn("hmm", freshair.parse_codex(path, True)[0]["text"])
+
+    def test_legacy_event_format_still_parses(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = write_codex_rollout(Path(home), "/repo", [
+                {"type": "event_msg", "payload": {
+                    "type": "user_message", "message": "old style ask"}},
+                {"type": "event_msg", "payload": {
+                    "type": "agent_message", "message": "old style reply"}},
+            ])
+            turns = freshair.parse_codex(path, keep_thinking=False)
+            self.assertEqual([t["role"] for t in turns], ["user", "assistant"])
+            self.assertEqual(turns[0]["text"], "old style ask")
+
+    def test_a_file_with_both_generations_does_not_double_count(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = write_codex_rollout(Path(home), "/repo", [
+                {"type": "event_msg", "payload": {
+                    "type": "user_message", "message": "the ask"}},
+                codex_msg("user", "the ask"),
+            ])
+            turns = freshair.parse_codex(path, keep_thinking=False)
+            self.assertEqual(len(turns), 1, "newer stream must win outright")
+
+    def test_our_own_review_requests_are_filtered_here_too(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = write_codex_rollout(Path(home), "/repo", [
+                codex_msg("user", "the real goal"),
+                codex_msg("user", freshair.MARKER_LINE + "review this"),
+            ])
+            turns = freshair.parse_codex(path, keep_thinking=False)
+            self.assertEqual(len(turns), 1)
+
+
+class TestCodexDiscovery(unittest.TestCase):
+    def test_a_review_we_spawned_is_never_offered_back(self):
+        with tempfile.TemporaryDirectory() as home:
+            write_codex_rollout(Path(home), "/repo",
+                                [codex_msg("user", freshair.MARKER_LINE + "review this")])
+            with mock.patch.dict(os.environ, {"CODEX_HOME": home}):
+                self.assertEqual(freshair.codex_transcripts(Path("/repo")), [])
+
+    def test_a_trailing_slash_does_not_lose_the_session(self):
+        with tempfile.TemporaryDirectory() as real:
+            with tempfile.TemporaryDirectory() as home:
+                write_codex_rollout(Path(home), real + os.sep, [codex_msg("user", "x")])
+                with mock.patch.dict(os.environ, {"CODEX_HOME": home}):
+                    self.assertEqual(len(freshair.codex_transcripts(Path(real))), 1)
+
+    def test_only_sessions_from_this_project_are_offered(self):
+        with tempfile.TemporaryDirectory() as home:
+            write_codex_rollout(Path(home), "/somewhere/else", [codex_msg("user", "x")])
+            with mock.patch.dict(os.environ, {"CODEX_HOME": home}):
+                self.assertEqual(freshair.codex_transcripts(Path("/repo")), [])
+
+    def test_a_session_started_at_the_repo_root_covers_a_subdirectory(self):
+        with tempfile.TemporaryDirectory() as home:
+            write_codex_rollout(Path(home), "/repo", [codex_msg("user", "x")])
+            with mock.patch.dict(os.environ, {"CODEX_HOME": home}):
+                found = freshair.codex_transcripts(Path("/repo/src/deep"))
+            self.assertEqual(len(found), 1)
+
+    def test_codex_home_env_var_is_respected(self):
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.dict(os.environ, {"CODEX_HOME": home}):
+                self.assertEqual(freshair.codex_home(), Path(home))
+
+    def test_explicit_transcript_is_recognised_as_codex_by_its_name(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = write_codex_rollout(Path(home), "/repo", [codex_msg("user", "x")])
+            _, source = freshair.find_transcript(str(path), Path("/repo"))
+            self.assertEqual(source, "codex")
+
+    def test_an_unknown_source_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            freshair.find_transcript(None, Path("/repo"), None, "cursor")
+
+
+class TestSeveralReviewers(unittest.TestCase):
+    """Independent reviewers that never saw each other's answers."""
+
+    def reachable(self, installed, key=""):
+        env = dict(os.environ); env["OPENROUTER_API_KEY"] = key
+        with mock.patch.dict(os.environ, env, clear=True), \
+             mock.patch.object(freshair.shutil, "which",
+                               side_effect=lambda b: f"/usr/bin/{b}" if b in installed else None):
+            return freshair.reachable_backends(freshair.resolve_backends({}))
+
+    def test_every_reachable_reviewer_is_offered(self):
+        self.assertEqual(self.reachable({"codex", "gemini", "claude"}, key="sk-or-v1-x"),
+                         ["codex", "gemini", "claude", "openrouter"])
+
+    def test_outsiders_come_first(self):
+        got = self.reachable({"claude", "gemini"})
+        self.assertLess(got.index("gemini"), got.index("claude"))
+
+    def test_openrouter_needs_its_key_to_count(self):
+        self.assertNotIn("openrouter", self.reachable({"claude"}))
+        self.assertIn("openrouter", self.reachable({"claude"}, key="sk-or-v1-x"))
+
+    def test_nothing_reachable_is_an_empty_list_not_a_crash(self):
+        self.assertEqual(self.reachable(set()), [])
+
+
+class TestOutputIsNotReadBack(unittest.TestCase):
+    """A printed review can land in the session as captured tool output."""
+
+    def test_a_previous_review_is_not_mistaken_for_conversation(self):
+        report = f"<!-- {freshair.OUTPUT_MARKER} -->\n# Outside opinion\n\n## Verdict\nADJUST COURSE"
+        self.assertTrue(freshair.is_own_payload(report))
+
+    def test_it_is_filtered_out_of_both_hosts(self):
+        report = f"<!-- {freshair.OUTPUT_MARKER} -->\n# Outside opinion"
+        claude = write_transcript([user("the goal"), user(report)])
+        self.assertEqual(len(freshair.parse_transcript(claude, False)), 1)
+
+        with tempfile.TemporaryDirectory() as home:
+            codex = write_codex_rollout(Path(home), "/repo", [
+                codex_msg("user", "the goal"), codex_msg("user", report)])
+            self.assertEqual(len(freshair.parse_codex(codex, False)), 1)
+
+    def test_ordinary_prose_is_not_mistaken_for_ours(self):
+        self.assertFalse(freshair.is_own_payload("here is my outside opinion on this"))

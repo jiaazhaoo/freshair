@@ -187,22 +187,26 @@ npm i -g @openai/codex      && codex    # sign in with ChatGPT
 npm i -g @google/gemini-cli && gemini   # sign in with Google
 ```
 
-Or use OpenRouter to name an arbitrary model. Connect it from inside the
-session you are already in — no terminal, no PATH, nothing to paste:
+Or use OpenRouter to name an arbitrary model. In a terminal:
 
+```bash
+freshair --login
 ```
-/freshair --login
-```
 
-A browser opens, you approve, and the key goes straight to disk. Any flag works
-this way: `/freshair --check`, `/freshair --show-config`, `/freshair -b codex`.
-From a terminal the same thing is `freshair --login`.
+A browser opens, you approve, and the key goes straight to disk — never shown,
+never pasted, never in your shell history.
 
-In a cloud or web session the browser is not on your machine, so the callback
-cannot come back. FreshAir detects that and switches to two steps by itself: it
-prints a URL, and after you approve — your browser will fail to load a localhost
-page, which is expected — you paste the `code=` from the address bar into
-`/freshair --login --code <code>`.
+Setup goes in a terminal because that is where a command runs immediately. The
+flags also reach you through the slash command (`/freshair --login`,
+`/freshair --check`, `/freshair -b codex`), but that path is a prompt to Claude
+rather than a program: it costs a turn and it is slower. Use it when you cannot
+get to a terminal.
+
+On a cloud or web session the browser is not on your machine, so the callback
+cannot come back. FreshAir detects that and switches to two steps: it prints a
+URL, and after you approve — your browser will fail to load a localhost page,
+which is expected — you paste the `code=` from the address bar into
+`freshair --login --code <code>`.
 
 It opens OpenRouter, waits on a loopback callback, and stores the key in
 `~/.config/freshair/config.json` with mode 600. Nothing to copy, nothing pasted

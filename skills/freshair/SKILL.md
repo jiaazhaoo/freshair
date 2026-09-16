@@ -83,31 +83,36 @@ including a custom `CODEX_HOME`. In Claude Code you may also pass
 
 ### Arguments that are flags, not focus text
 
-**If the user's argument starts with `-`, it is an option — pass it straight
-through instead of quoting it as a focus string.** This is what lets setup
-happen without leaving the session, which is the whole reason it matters:
+If the user's argument starts with `-`, it is an option — pass it straight
+through instead of quoting it as a focus string:
 
 | The user types | You run |
 |---|---|
-| `/freshair --login` | `python3 "$FA" --login` |
-| `/freshair --login --code abc123` | `python3 "$FA" --login --code abc123` |
-| `/freshair --check` | `python3 "$FA" --check` |
-| `/freshair --show-config` | `python3 "$FA" --show-config` |
 | `/freshair -b codex` | `python3 "$FA" -b codex` |
 | `/freshair -p council why is this slow` | `python3 "$FA" -p council "why is this slow"` |
+| `/freshair --mode full` | `python3 "$FA" --mode full` |
 | `/freshair why is this slow` | `python3 "$FA" "why is this slow"` |
 
-So `/freshair --login` is the short way to connect OpenRouter: it opens a
-browser, the user approves, the key is stored, and they never touch a terminal
-or see the key. Relay the printed URL if the script says it could not open a
-browser.
+### Setup belongs in a terminal, not here
 
-`--login` opens a browser on the machine the script runs on. In a local session
-that is the user's own. In a cloud or web session it is not, and the script
-detects that and switches by itself to a two-step flow: relay the URL it prints,
-then run `--login --code <what they paste>` when they come back with it. Their
-browser will fail to load a localhost page after approving — that is expected,
-and the code is in its address bar.
+`--login`, `--set-key`, `--save-default` and `--show-config` all work through
+the slash command, but **say plainly that the terminal is the better place for
+them** if the user is doing setup. A slash command is a prompt to you: it costs
+a turn, it is slower, and it depends on you reading it correctly. In a terminal
+`freshair --login` is a program that runs immediately.
+
+It matters most for `--login`. There it opens a browser on whichever machine the
+script runs on:
+
+- **User's own machine** — the browser is theirs. One click, done.
+- **Cloud or web session** — it is not theirs, and no callback can come back.
+  The script detects this and prints a URL plus instructions to paste the code
+  back with `--login --code`. Relay both. This works, but it is three steps
+  where the terminal on their own machine is one.
+
+So when someone asks how to connect OpenRouter, the answer is `freshair --login`
+in a terminal on their own machine. Offer the in-session path only when they
+cannot get to one.
 
 ### Which session it reads
 

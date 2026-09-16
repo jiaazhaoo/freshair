@@ -1806,10 +1806,11 @@ def main() -> None:
     for name in selected:
         if name == "openrouter":
             if not api_key:
-                die("No OpenRouter key. Either store one with\n"
-                    "    freshair --set-key sk-or-v1-...\n"
-                    "(get it at https://openrouter.ai/keys), or use a CLI you "
-                    "are already signed in to: --backend codex | gemini | claude")
+                die("No OpenRouter key. In a terminal:\n"
+                    "    freshair --login            sign in through a browser\n"
+                    "    freshair --set-key sk-...   or store one you have\n"
+                    "Or skip OpenRouter and use a CLI you are already signed in "
+                    "to: --backend codex | gemini | claude")
         elif not shutil.which(backends[name]["cmd"][0]):
             die(f"backend {name!r} needs {backends[name]['cmd'][0]!r} on PATH, "
                 f"and it is not there.\nInstall and sign in to it, pick another "

@@ -187,12 +187,16 @@ npm i -g @openai/codex      && codex    # sign in with ChatGPT
 npm i -g @google/gemini-cli && gemini   # sign in with Google
 ```
 
-Or use OpenRouter to name an arbitrary model. Connect it in a browser — you
-approve, and the key goes straight to disk without passing through your hands:
+Or use OpenRouter to name an arbitrary model. Connect it from inside the
+session you are already in — no terminal, no PATH, nothing to paste:
 
-```bash
-freshair --login
 ```
+/freshair --login
+```
+
+A browser opens, you approve, and the key goes straight to disk. Any flag works
+this way: `/freshair --check`, `/freshair --show-config`, `/freshair -b codex`.
+From a terminal the same thing is `freshair --login`.
 
 It opens OpenRouter, waits on a loopback callback, and stores the key in
 `~/.config/freshair/config.json` with mode 600. Nothing to copy, nothing pasted

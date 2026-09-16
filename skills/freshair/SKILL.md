@@ -68,20 +68,43 @@ raise it again for that same issue.
 
 ## Running it
 
+Call the script; `FA` below is just shorthand for its path:
+
 ```bash
-python3 "${CLAUDE_SKILL_DIR:-${CODEX_HOME:-$HOME/.codex}/skills/freshair}/scripts/freshair.py"
+FA="${CLAUDE_SKILL_DIR:-${CODEX_HOME:-$HOME/.codex}/skills/freshair}/scripts/freshair.py"
+
+python3 "$FA"                                   # review this session
+python3 "$FA" "is the caching layer worth it"   # with a focus
 ```
 
 `CLAUDE_SKILL_DIR` is set inside Claude Code; the fallback covers Codex,
-including a custom `CODEX_HOME`, where the script sits next to this file. Append whatever the user asked you to focus
-on as a quoted argument:
+including a custom `CODEX_HOME`. In Claude Code you may also pass
+`--session-id "${CLAUDE_SESSION_ID}"` if autodetection picks the wrong session.
 
-```bash
-python3 "${CLAUDE_SKILL_DIR:-${CODEX_HOME:-$HOME/.codex}/skills/freshair}/scripts/freshair.py" "is the caching layer worth it"
-```
+### Arguments that are flags, not focus text
 
-In Claude Code you may also pass `--session-id "${CLAUDE_SESSION_ID}"` if
-autodetection picks the wrong session.
+**If the user's argument starts with `-`, it is an option — pass it straight
+through instead of quoting it as a focus string.** This is what lets setup
+happen without leaving the session, which is the whole reason it matters:
+
+| The user types | You run |
+|---|---|
+| `/freshair --login` | `python3 "$FA" --login` |
+| `/freshair --check` | `python3 "$FA" --check` |
+| `/freshair --show-config` | `python3 "$FA" --show-config` |
+| `/freshair -b codex` | `python3 "$FA" -b codex` |
+| `/freshair -p council why is this slow` | `python3 "$FA" -p council "why is this slow"` |
+| `/freshair why is this slow` | `python3 "$FA" "why is this slow"` |
+
+So `/freshair --login` is the short way to connect OpenRouter: it opens a
+browser, the user approves, the key is stored, and they never touch a terminal
+or see the key. Relay the printed URL if the script says it could not open a
+browser.
+
+One caveat worth stating when it comes up: `--login` opens a browser on the
+machine the script runs on. In a local session that is the user's own machine.
+In a cloud or remote session it is not, and the script prints the URL and the
+port-forwarding line instead.
 
 ### Which session it reads
 
@@ -159,10 +182,11 @@ the user's files for an API key.
 If the user wants a different provider or model set, do not hand-edit JSON for
 them — the script writes its own config:
 
-`freshair` here is the launcher `install.sh` puts in `~/.local/bin`. If the user
-reports `command not found`, it is not on their PATH — give them the direct
-form instead of debugging their shell:
-`python3 "${CLAUDE_SKILL_DIR}/scripts/freshair.py" --login`
+These are written as `freshair`, the launcher `install.sh` puts in
+`~/.local/bin`. **The user does not need it** — `/freshair --login` and friends
+reach the same flags from inside the session, with no PATH involved. If they do
+report `command not found` in a terminal, point them back at the slash command
+rather than debugging their shell.
 
 ```bash
 freshair --login                                         # connect OpenRouter in a browser
